@@ -26,10 +26,10 @@ option_dump_received_different = True;
 option_auto_send = 5
 
 
-pplay_version = "1.1"
+pplay_version = "1.2"
 
 title='pplay - application payload player - %s' % (pplay_version,)
-copyright="written by Ales Stibal <astibal@gmail.com> (c) 2014"
+copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
 
 
 g_script_module = None
@@ -118,8 +118,6 @@ def hexdump(buf, length=16):
         res.append('  %04d:  %-*s %s' % (n, length * 3, hexa, line))
         n += length
     return '\n'.join(res)
-
-import re
 
 def colorize(s,keywords):
     t = s
@@ -424,7 +422,7 @@ class Repeater:
         print_yellow_bright("#<--")
         
         print_yellow_bright("#--> SEND IT TO SOCKET? [ y=yes (default) | s=skip | c=CR | l=LF | x=CRLF ]")
-        print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
+        print_yellow_bright("#    For more commands or help please enter 'h'.")
 
 
     def ask_to_send_more(self):
@@ -484,9 +482,12 @@ class Repeater:
 
             while True:
                 print ("waiting for new connection...")
-                conn, client_address = s.accept()
                 
+                conn, client_address = s.accept()
                 print ("accepted client from %s:%s" % (client_address[0],client_address[1]))
+            
+                #flush stdin before real commands are inserted
+                sys.stdin.flush()
             
                 conn = self.prepare_socket(conn,True)
             
@@ -726,7 +727,7 @@ class Repeater:
                         if sys.stdin in r:
                             l = sys.stdin.readline()
                             #print("# --> entered: '" + l + "'")
-                            self.process_command(l.strip(),'ysclxri',conn)
+                            self.process_command(l.strip(),'ysclxrih',conn)
 
                             # in auto mode, reset current state, since we wrote into the socket
                             if option_auto_send:
@@ -769,7 +770,7 @@ class Repeater:
         if len(command) > 1:
             
             parts = command.split(command[1])
-            print_yellow(str(parts))
+            #print_yellow(str(parts))
             if len(parts) == 4:
                 return re.sub(parts[1],parts[2],str(data),int(parts[3]),flags=re.MULTILINE)
             else:
@@ -780,49 +781,66 @@ class Repeater:
     def process_command(self,l,mask,conn):
         global option_auto_send
         
+        #print_yellow_bright("# thank you!")
+        
         if l == '':
             l = 'y'
         
-        if l in mask and (l.startswith("y")):
-            self.send_to_send(conn)
+        if l[0] not in mask:
+            print_yellow_bright("# Unknown command in this context.")
+        else:
+            if (l.startswith("y")):
+                self.send_to_send(conn)
+                
+                if self.packet_index == len(self.origins[self.whoami]):
+                    print_green_bright("# %s [%d/%d]: that was our last one!!" % (str_time(),self.packet_index,len(self.origins[self.whoami])))
+                
+            elif l.startswith('s'):
+                self.packet_index += 1                                
+                self.to_send = None
+                print_green_bright("# %s [%d/%d]: has been SKIPPED" % (str_time(),self.packet_index,len(self.origins[self.whoami])))
+
+            elif l.startswith('c'):
+                self.to_send = None # to reinit and ask again
+                cnt = self.write(conn,"\n")
+                print_green_bright("# %s custom '\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
+
+            elif l.startswith('l'):
+                self.to_send = None # to reinit and ask again
+                cnt = self.write(conn,"\r")
+                print_green_bright("# %s custom '\\r' payload (%d bytes) inserted" % (str_time(),cnt,))
+
+            elif l.startswith('x'):
+                self.to_send = None # to reinit and ask again
+                cnt = self.write(conn,"\r\n")
+                print_green_bright("# %s custom '\\r\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
+
+            elif l.startswith('r'):
+                ret = self.replace(l.strip(),self.to_send)
+                if ret:
+                    self.to_send = ret
+                    print_yellow_bright("# %s custom payload created (%d bytes)" % (str_time(),len(self.to_send),))
+                    self.ask_to_send(self.to_send)
+                else:
+                    print_yellow_bright("# Failed to create custom payload")
+
+            elif l.startswith('i'):
+                option_auto_send = (-1 * option_auto_send)
+                if option_auto_send > 0:
+                    print_yellow_bright("# Toggle automatic send: enabled, interval %d" % (option_auto_send,))
+                else:
+                    print_yellow_bright("# Toggle automatic send: disabled")        
+
+            elif l.startswith('h'):
+                self.print_help()
             
-            if self.packet_index == len(self.origins[self.whoami]):
-                print_green_bright("# %s [%d/%d]: that was our last one!!" % (str_time(),self.packet_index,len(self.origins[self.whoami])))
-            
-        elif l in mask and l.startswith('s'):
-            self.packet_index += 1                                
-            self.to_send = None
-            print_green_bright("# %s [%d/%d]: has been SKIPPED" % (str_time(),self.packet_index,len(self.origins[self.whoami])))
-
-        elif l in mask and l.startswith('c'):
-            self.to_send = None # to reinit and ask again
-            cnt = self.write(conn,"\n")
-            print_green_bright("# %s custom '\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
-
-        elif l in mask and l.startswith('l'):
-            self.to_send = None # to reinit and ask again
-            cnt = self.write(conn,"\r")
-            print_green_bright("# %s custom '\\r' payload (%d bytes) inserted" % (str_time(),cnt,))
-
-        elif l in mask and l.startswith('x'):
-            self.to_send = None # to reinit and ask again
-            cnt = self.write(conn,"\r\n")
-            print_green_bright("# %s custom '\\r\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
-
-        elif l in mask and l.startswith('r'):
-            ret = self.replace(l.strip(),self.to_send)
-            if ret:
-                self.to_send = ret
-                print_yellow_bright("# %s custom payload created (%d bytes)" % (str_time(),len(self.to_send),))
-                self.ask_to_send(self.to_send)
-            else:
-                print_yellow_bright("# Failed to create custom payload")
-        elif l in mask and l.startswith('i'):
-            option_auto_send = (-1 * option_auto_send)
-            if option_auto_send > 0:
-                print_yellow_bright("# Toggle automatic send: enabled, interval %d" % (option_auto_send,))
-            else:
-                print_yellow_bright("# Toggle automatic send: disabled")        
+    def print_help(self):
+        print_yellow_bright("#    More commands:");
+        print_yellow_bright("#    i  - interrupt or continue auto-send feature. Interval=%d." % (abs(option_auto_send),))
+        print_yellow_bright("#    r  - replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
+        print_yellow_bright("#       - will try to match on all buffer lines")
+        print_yellow_bright("#    N  - prepare brand new data. Multiline, empty line commits. ")
+        
 
 
 def main():
