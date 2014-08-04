@@ -426,7 +426,7 @@ class Repeater:
 
 
     def ask_to_send_more(self):
-        print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF ]")
+        print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF | N=new data]")
         #print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
 
 
@@ -562,30 +562,33 @@ class Repeater:
     
 
     def send_to_send(self,conn):
-        self.packet_index += 1
-        self.total_packet_index += 1
-
-        total_data_len = len(self.to_send)
-        total_written = 0
-
-        while total_written != total_data_len:
-            cnt = self.write(conn,(str(self.to_send)))
-            
-            # not really clean debug, lots of data will be duplicated
-            # if cnt > 200: cnt = 200
-            
-            data_len = len(self.to_send)
-
-            if cnt == data_len:
-                print_green_bright("# %s [%d/%d]: has been sent (%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt))
-            else:
-                print_green_bright("# %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt,data_len))
-                self.to_send = str(self.to_send)[cnt:]
-            
-            total_written += cnt
-
-        self.to_send = None
         
+        if self.to_send:
+            self.packet_index += 1
+            self.total_packet_index += 1
+
+            total_data_len = len(self.to_send)
+            total_written = 0
+
+            while total_written != total_data_len:
+                cnt = self.write(conn,(str(self.to_send)))
+                
+                # not really clean debug, lots of data will be duplicated
+                # if cnt > 200: cnt = 200
+                
+                data_len = len(self.to_send)
+
+                if cnt == data_len:
+                    print_green_bright("# %s [%d/%d]: has been sent (%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt))
+                else:
+                    print_green_bright("# %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt,data_len))
+                    self.to_send = str(self.to_send)[cnt:]
+                
+                total_written += cnt
+
+            self.to_send = None
+
+           
         
 
     def select_wrapper(self,conn,no_writes):
@@ -727,7 +730,7 @@ class Repeater:
                         if sys.stdin in r:
                             l = sys.stdin.readline()
                             #print("# --> entered: '" + l + "'")
-                            self.process_command(l.strip(),'ysclxrih',conn)
+                            self.process_command(l.strip(),'ysclxrihN',conn)
 
                             # in auto mode, reset current state, since we wrote into the socket
                             if option_auto_send:
@@ -757,14 +760,14 @@ class Repeater:
 
             if write_end and sys.stdin in r:
                 l = sys.stdin.readline()
-                self.process_command(l.strip(),'clx',conn)
+                self.process_command(l.strip(),'yclxN',conn)
 
                 if self.to_send:
                     self.ask_to_send()
                 else:
                     self.ask_to_send_more()
 
-    def replace(self,command,data):
+    def cmd_replace(self,command,data):
         # something like vim's replace:  r/something/smtelse/0
         
         if len(command) > 1:
@@ -774,9 +777,31 @@ class Repeater:
             if len(parts) == 4:
                 return re.sub(parts[1],parts[2],str(data),int(parts[3]),flags=re.MULTILINE)
             else:
+                print_yellow("Syntax error: please follow this pattern:")
+                print_yellow("    r<delimiter><original><delimiter><replacement><delimiter><number_of_replacements>")
+                print_yellow("Example:\n    r/GET/HEAD/1 ")
+                print_yellow("Note:\n    Delimiter could be any character you choose. If number_of_replacements is zero, all occurences of original string are replaced.")
                 return None
 
         return None
+
+    def cmd_newdata(self,command,data):
+        nd = ''
+        nl = 1
+
+        print_yellow_bright("%% Enter new payload line by line (empty line commits). Lines will be sent out separated by CRLF.")
+        l = sys.stdin.readline()
+
+        while l.strip():
+            nd += l.strip() + "\r\n"
+            nl += 1
+            l = sys.stdin.readline()
+        
+        if nl > 1:
+            print_yellow_bright("%% %d lines (%d bytes)" % (nl,len(nd)))
+        else:
+            print_yellow_bright("%% empty string - ignored")
+        return nd
 
     def process_command(self,l,mask,conn):
         global option_auto_send
@@ -815,14 +840,21 @@ class Repeater:
                 cnt = self.write(conn,"\r\n")
                 print_green_bright("# %s custom '\\r\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
 
-            elif l.startswith('r'):
-                ret = self.replace(l.strip(),self.to_send)
+            elif l.startswith('r') or l.startswith('N'):
+                
+                ret = None
+                
+                if l.startswith('r'):
+                    ret = self.cmd_replace(l.strip(),self.to_send)
+                elif l.startswith('N'):
+                    ret = self.cmd_newdata(l.strip(),self.to_send)
+                    
                 if ret:
                     self.to_send = ret
                     print_yellow_bright("# %s custom payload created (%d bytes)" % (str_time(),len(self.to_send),))
                     self.ask_to_send(self.to_send)
                 else:
-                    print_yellow_bright("# Failed to create custom payload")
+                    print_yellow_bright("# Custom payload not created")
 
             elif l.startswith('i'):
                 option_auto_send = (-1 * option_auto_send)
