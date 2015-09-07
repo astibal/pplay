@@ -199,10 +199,15 @@ class Repeater:
         #print("Looking for client connection %s:%s" % (im_ip,im_port))
 
         for i in s:
-            sip = i[IP].src
-            dip = i[IP].dst
-            sport = str(i[TCP].sport)
-            dport = str(i[TCP].dport)
+            
+            try:
+                sip = i[IP].src
+                dip = i[IP].dst
+                sport = str(i[TCP].sport)
+                dport = str(i[TCP].dport)
+            except IndexError,e:
+                # IndexError: Layer [TCP|IP] not found
+                continue
 
             #print ">>> %s:%s -> %s:%s" % (sip,sport,dip,dport)
 
@@ -223,6 +228,12 @@ class Repeater:
                 if len(p) == 0:
                     #print "No payload"
                     continue
+                
+                #print("--")
+                #print("Len: %s",help(p))
+                if type(p) == type(Padding):
+                    print("... reached end of tcp, frame contains padding")
+                #print(hexdump(str(p)))
                 
                 current_index = len(self.packets)
                 
