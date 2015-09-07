@@ -16,7 +16,7 @@ import datetime
 import pprint
 
 from scapy.all import *
-#from select import select
+from select import select
 
 have_colorama = False
 have_ssl = False
