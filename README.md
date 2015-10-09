@@ -16,49 +16,58 @@ Output is colored; RED means anything related to received stuff, GREEN everythin
 
 # Here is most typical use-cases you would probably want to run #
 
-## LIST CONNECTION YOU ARE INTERESTED
-
+## List connections you have available
+```
 $ pplay.py --pcap samples/post-chunked-response.pcap --list
 
 10.0.0.20:59471 -> 192.168.132.1:80 (starting at frame 0)
 192.168.132.1:80 -> 10.0.0.20:59471 (starting at frame 1)
+```
 
-### --- run on server side
+### Run server side pplay instance 
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server --connection 10.0.0.20:59471 --auto 2
-### -- run on client side
+### Run client side instance
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.1 --connection 10.0.0.20:59471  --auto 2
 
 
-## EXPORT DATA TO "SCRIPT" ( AND POSSIBLY MODIFY THEM )
-
+## Export data to "script" and possibly modify them
+```
 $ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
 
 Template python script has been exported to file stuff.py
+```
 
-
+## You can use "script" as the sniff file
+```
 $ sudo ./pplay.py  --script stuff --server
 $ ./pplay.py --client 127.0.0.1 --script stuff
+```
 
-
-## TEST WITH SSL
-
+## You can also wrap everything into SSL
+```
 $ sudo ./pplay.py  --script stuff --server --ssl
 $ ./pplay.py --client 127.0.0.1 --script stuff --ssl
+```
 
+## Using smithproxy captures (*.smcap files)
 
-## USE SMCAP (SMITHPROXY CAPTURES)
-
-### --- list connections
+### List connections
+```
 $ ./pplay.py  --smcap samples/smcap_sample.smcap --list
 ssl+insp_192.168.254.113:33069 -> ssl+insp_74.125.140.139:443  (single connection per file in smcap files)
+```
 
-### --- run on server
+### Run server pplay instance
+```
 $ sudo ./pplay.py  --server --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --ssl
+```
 
-### --- run on client
+### Run client pplay instance
+```
 $ ./pplay.py --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --client 127.0.0.1 --ssl
+```
 
-## Typical task list is: ##
+## So ... typical task list is: ##
 
 *     get the pcap
 *     look inside using wireshark and remember/write down source IP and source port of connection you are interested in to be replayed
