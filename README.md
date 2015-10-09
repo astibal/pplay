@@ -25,25 +25,28 @@ $ pplay.py --pcap samples/post-chunked-response.pcap --list
 ```
 
 ### Run server side pplay instance 
+```
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server --connection 10.0.0.20:59471 --auto 2
+```
 ### Run client side instance
+```
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.1 --connection 10.0.0.20:59471  --auto 2
+```
 
-
-## Export data to "script" and possibly modify them
+### Export data to "script" and possibly modify them
 ```
 $ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
 
 Template python script has been exported to file stuff.py
 ```
 
-## You can use "script" as the sniff file
+### You can use "script" as the sniff file
 ```
 $ sudo ./pplay.py  --script stuff --server
 $ ./pplay.py --client 127.0.0.1 --script stuff
 ```
 
-## You can also wrap everything into SSL
+### You can also wrap everything into SSL
 ```
 $ sudo ./pplay.py  --script stuff --server --ssl
 $ ./pplay.py --client 127.0.0.1 --script stuff --ssl
