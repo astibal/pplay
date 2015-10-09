@@ -259,7 +259,7 @@ class Repeater:
         for line in fileinput.input(files=[self.fnm,]):
             #print_yellow("Processing: " + line.strip())
             
-            re_packet_start = re.compile(r'^\+\d+: +\d+::([^:]+):([^:]+)-\d+::([^:]+):([^:(]+)')
+            re_packet_start = re.compile(r'^\+\d+: +([^:]+):([^:]+)-([^:]+):([^:(]+)')
             re_packet_content_client = re.compile(r'^>\[([0-9a-f])+\][^0-9A-F]+([0-9A-F ]{2,49})')
             re_packet_content_server = re.compile(r'^ +<\[([0-9a-f])+\][^0-9A-F]+([0-9A-F ]{2,49})')
             
@@ -334,7 +334,7 @@ class Repeater:
 
     def list_smcap(self):
         for line in fileinput.input(files=[self.fnm,]):
-            re_packet_start = re.compile(r'^\+\d+: +\d+::([^:]+):([^:]+)-\d+::([^:]+):([^:(]+)')
+            re_packet_start = re.compile(r'^\+\d+: ([^:]+):([^:]+)-([^:]+):([^:(]+)')
            
             sip = None
             dip = None
