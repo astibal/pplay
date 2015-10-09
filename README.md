@@ -13,6 +13,51 @@ All data about to be sent will be printed out to be confirmed by you. When recei
 
 Output is colored; RED means anything related to received stuff, GREEN everything to data to be sent, or YELLOW for command line and other data eligible to be sent in the future but not now. WHITE is usually program notifications. At the first sight pplay's output might look bit a messy, but colors really help.
 
+
+# Here is most typical use-cases you would probably want to run #
+
+## LIST CONNECTION YOU ARE INTERESTED
+
+$ pplay.py --pcap samples/post-chunked-response.pcap --list
+
+10.0.0.20:59471 -> 192.168.132.1:80 (starting at frame 0)
+192.168.132.1:80 -> 10.0.0.20:59471 (starting at frame 1)
+
+### --- run on server side
+$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server --connection 10.0.0.20:59471 --auto 2
+### -- run on client side
+$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.1 --connection 10.0.0.20:59471  --auto 2
+
+
+## EXPORT DATA TO "SCRIPT" ( AND POSSIBLY MODIFY THEM )
+
+$ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
+
+Template python script has been exported to file stuff.py
+
+
+$ sudo ./pplay.py  --script stuff --server
+$ ./pplay.py --client 127.0.0.1 --script stuff
+
+
+## TEST WITH SSL
+
+$ sudo ./pplay.py  --script stuff --server --ssl
+$ ./pplay.py --client 127.0.0.1 --script stuff --ssl
+
+
+## USE SMCAP (SMITHPROXY CAPTURES)
+
+### --- list connections
+$ ./pplay.py  --smcap samples/smcap_sample.smcap --list
+ssl+insp_192.168.254.113:33069 -> ssl+insp_74.125.140.139:443  (single connection per file in smcap files)
+
+### --- run on server
+$ sudo ./pplay.py  --server --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --ssl
+
+### --- run on client
+$ ./pplay.py --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --client 127.0.0.1 --ssl
+
 ## Typical task list is: ##
 
 *     get the pcap
