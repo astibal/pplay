@@ -26,7 +26,7 @@ option_dump_received_different = True;
 option_auto_send = 5
 
 
-pplay_version = "1.2"
+pplay_version = "1.3"
 
 title='pplay - application payload player - %s' % (pplay_version,)
 copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
