@@ -145,7 +145,7 @@ class Repeater:
         self.origins['server'] = []
         
         self.server_port = 0
-        self.server_replaced_ip = server_ip
+        self.custom_ip = server_ip
         
         self.whoami = ""
         
@@ -459,17 +459,24 @@ class Repeater:
         try:
             self.whoami = "client"
             
-            print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (self.server_replaced_ip,self.server_port))
-            
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s = self.prepare_socket(s,False)
             
+            ip = self.custom_ip
+            port = int(self.server_port)
+            
+            t = ip.split(":")
+            if len(t) > 1:
+                ip = t[0]
+                port = t[1]
+
+            print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip,port))
             try:
-                s.connect((self.server_replaced_ip,int(self.server_port)))
+                s.connect((ip,int(port)))
                 self.packet_loop(s)
                 
             except socket.error,e:
-                print_white_bright("Connection to %s:%s failed: %s" % (self.server_replaced_ip, self.server_port, e))
+                print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
                 return
             
             
@@ -481,10 +488,25 @@ class Repeater:
         global g_script_module
         
         try:
-            self.whoami = "server"
-            print_white_bright("IMPERSONATING SERVER, listening on %s" % (self.server_port,))
+            ip = "0.0.0.0"
+            port = int(self.server_port)
             
-            server_address = ('0.0.0.0', int(self.server_port))
+            if self.custom_ip:
+                
+                print("custom IP: " + self.custom_ip)
+                
+                t = self.custom_ip.split(":")
+                if len(t) > 1:
+                    ip = t[0]
+                    port = t[1]
+                elif len(t) == 1:
+                    # assume it's port
+                    port = t[0]
+                
+            self.whoami = "server"
+            print_white_bright("IMPERSONATING SERVER, listening on %s:%s" % (ip,port,))
+            
+            server_address = (ip, int(port))
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             
@@ -906,8 +928,8 @@ def main():
 
     ac = parser.add_argument_group("Actions")
     group2 = ac.add_mutually_exclusive_group()
-    group2.add_argument('--client', nargs=1, help='replay client-side of the CONNECTION, connect and send it to specified IP address')
-    group2.add_argument('--server', action='store_true', help='listen on socket and replay server part of the connection to incoming connections')
+    group2.add_argument('--client', nargs=1, help='replay client-side of the CONNECTION, connect and send payload to specified IP address and port. Use IP:PORT or IP.')
+    group2.add_argument('--server', nargs='?', help='listen on port and replay server payload, accept incoming connections. Use IP:PORT or PORT')
     group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
     group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
 
@@ -919,7 +941,7 @@ def main():
     var.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
     auto_group = var.add_mutually_exclusive_group()
     auto_group.add_argument('--noauto', required=False, action='store_true', help='toggle this to confirm each payload to be sent')
-    auto_group.add_argument('--auto', nargs='?',required=False, type=int, default=5, help='let %(prog)s to send payload automatically each AUTO seconds (default: %(default)s)')
+    auto_group.add_argument('--auto', nargs='?',required=False, type=float, default=5.0, help='let %(prog)s to send payload automatically each AUTO seconds (default: %(default)s)')
     
 
     args = parser.parse_args(sys.argv[1:])
@@ -1021,16 +1043,27 @@ def main():
             if args.noauto:
                 option_auto_send = -1
             elif args.auto:
-                option_auto_send = int(args.auto)
+                option_auto_send = args.auto
             else:
                 # option_auto_send = 5
                 pass
             
             
             if args.client:
-                r.server_replaced_ip = args.client[0]
+                
+                if len(args.client) > 0:
+                    r.custom_ip = args.client[0]
+                
                 r.impersonate('client')
+
             elif args.server:
+
+                if len(args.server) > 0:
+                    # arg type is '?' so no list there, just string
+                    r.custom_ip = args.server
+                else:
+                    r.custom_ip = None
+                
                 r.impersonate('server')
 
     else:
