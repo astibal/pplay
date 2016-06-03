@@ -659,11 +659,17 @@ class Repeater:
         running = 1        
         write_end = False
         auto_send_now = time.time()
-        
+        eof_notified = False
         
         while running:
             time.sleep(0.2)
             #print_red(".")
+            
+            if self.total_packet_index >= len(self.packets):
+                if not eof_notified:
+                    print_red_bright("### END OF TRANSMISSION ###")
+                    eof_notified = True
+            
             r,w,e = self.select_wrapper(conn,write_end)
             
             if conn in r:
