@@ -256,7 +256,8 @@ class Repeater:
 
         have_connection = False
         
-        for line in fileinput.input(files=[self.fnm,]):
+        fin = fileinput.input(files=[self.fnm,])
+        for line in fin:
             #print_yellow("Processing: " + line.strip())
             
             re_packet_start = re.compile(r'^\+\d+: +([^:]+):([^:]+)-([^:]+):([^:(]+)')
@@ -321,6 +322,7 @@ class Repeater:
                     this_packet_origin = None
                     this_packet_index += 1
 
+        
 
     def smcap_convert_lines_to_bytes(this, list_of_ords):
         bytes = ''
@@ -333,7 +335,9 @@ class Repeater:
         return bytes
 
     def list_smcap(self):
-        for line in fileinput.input(files=[self.fnm,]):
+        
+        fin = fileinput.input(files=[self.fnm,])
+        for line in fin:
             re_packet_start = re.compile(r'^\+\d+: ([^:]+):([^:]+)-([^:]+):([^:(]+)')
            
             sip = None
@@ -353,7 +357,9 @@ class Repeater:
                     dport = m.group(4)
                     print_yellow("%s:%s -> %s:%s  (single connection per file in smcap files)" % (sip,sport,dip,dport))
                     
-                    return
+                    fin.close()
+                    return "%s:%s" % (sip,sport)
+                
                 
     def export_script(self,efile):
         
@@ -1023,7 +1029,20 @@ def main():
             if args.smcap:
                 r.read_smcap(im_ip,im_port)
             elif args.pcap:
-                r.read_pcap(im_ip,im_port)        
+                r.read_pcap(im_ip,im_port)
+        
+        elif args.smcap:
+            # no --connection option setsockopt
+            
+                # okay, smcap holds only single connection
+                # detect and read the connection
+                
+                ip_port = r.list_smcap().split(":")
+                if len(ip_port) > 1:
+                    im_ip = ip_port[0]
+                    im_port = ip_port[1]
+                    r.read_smcap(im_ip,im_port)
+               
         
         # we have to have data available, unless controlled by script
         elif not args.script:
