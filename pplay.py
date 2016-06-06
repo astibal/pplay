@@ -163,6 +163,8 @@ class Repeater:
         self._last_countdown_print = 0
 
         self.scripter = None
+        
+        self.exitoneot = False
 
 
     def load_scripter_defaults(self):
@@ -675,6 +677,11 @@ class Repeater:
                 if not eof_notified:
                     print_red_bright("### END OF TRANSMISSION ###")
                     eof_notified = True
+                    
+                if self.exitoneot:
+                    print_red("Exiting on EOT")
+                    shutdown(conn)
+                    sys.exit(0)
             
             r,w,e = self.select_wrapper(conn,write_end)
             
@@ -954,7 +961,7 @@ def main():
     auto_group = var.add_mutually_exclusive_group()
     auto_group.add_argument('--noauto', required=False, action='store_true', help='toggle this to confirm each payload to be sent')
     auto_group.add_argument('--auto', nargs='?',required=False, type=float, default=5.0, help='let %(prog)s to send payload automatically each AUTO seconds (default: %(default)s)')
-    
+    var.add_argument('--exitoneot', required=False, action='store_true', help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1078,6 +1085,9 @@ def main():
                 
                 if len(args.client) > 0:
                     r.custom_ip = args.client[0]
+                
+                if args.exitoneot:
+                    r.exitoneot = True
                 
                 r.impersonate('client')
 
