@@ -1,0 +1,21 @@
+#!/bin/sh
+FNM=$1
+OPATH="/tmp/"
+OFILE=`basename $FNM | sed -e "s/.smcap/.pcap/"`
+#OFILE=`mktemp smcap2pcap.XXXXX --suffix .pcap`
+O="${OPATH}${OFILE}"
+
+tcpdump -i lo -n 'host 127.0.0.2' -s 20000 -w $O --immediate-mode > /dev/null 2>&1 &
+TCPDUMP=$!
+
+/home/astib/bin/pplay --server 127.0.0.2:9999  --smcap $FNM  --auto 0.01 > /dev/null 2>&1 &
+PPLAYS=$!
+sleep 1;
+
+/home/astib/bin/pplay --client 127.0.0.2:9999  --smcap $FNM  --auto 0.01 --exitoneot > /dev/null 2>&1
+# wait for it to finish
+
+kill -2 $TCPDUMP
+kill -9 $PPLAYS
+
+echo -n $O
