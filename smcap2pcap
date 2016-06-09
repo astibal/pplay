@@ -15,8 +15,8 @@ PORT="0"
 echo "output file: $O"
 
 # detect colliding ports:
-RGX=`netstat -nap | grep 'LISTEN ' | grep '\(0.0.0.0\|127.0.0.2\):[0-9]\+' | awk '{ print $4 }' | sed -e 's/::/0/g' | awk -F: '{ print $2 }' | sort -n | uniq | tr '\n' '|' | sed -e 's/|/\\|/g'`
-PPORT=`basename $FNM | grep -o '[0-9]\+.smcap' | awk -F. ' { print $1 }'`
+RGX=`netstat -nap | grep 'LISTEN ' | grep '\(0.0.0.0\|127.0.0.2\):[0-9]\+' | awk '{ print $4 }' | sed -e 's/::/0/g' | awk -F: '{ print $2 }' | sort -n | uniq | tr '\n' '|' | sed -e 's/|/\\|/g' | sed -e 's/|$//'`
+PPORT=`pplay --smcap $FNM --smprint dport 2>/dev/null`
 
 echo "$PPORT" | egrep "$RGX"
 
