@@ -165,7 +165,12 @@ class Repeater:
         self.scripter = None
         
         self.exitoneot = False
+        self.nostdin = False
 
+        self.is_udp = False
+        
+        # our peer (ip,port)
+        self.target = (0,0)
 
     def load_scripter_defaults(self):
         if self.scripter:
@@ -283,6 +288,9 @@ class Repeater:
                     have_connection = True
 
                     self.server_port = dport
+                    
+                    if sip.startswith("udp_"):
+                        self.is_udp = True
 
 
             matched = False
@@ -359,6 +367,9 @@ class Repeater:
                     dport = m.group(4)
                     print_yellow("%s:%s -> %s:%s  (single connection per file in smcap files)" % (sip,sport,dip,dport))
                     
+                    if sip.startswith("udp_"):
+                        self.is_udp = True
+                    
                     fin.close()
                     return "%s:%s" % (sip,sport)
                 
@@ -395,6 +406,7 @@ class Repeater:
 
     # for spaghetti lovers
     def impersonate(self,who):
+        
         if who == "client":
             self.impersonate_client()
         elif who == "server":
@@ -467,7 +479,13 @@ class Repeater:
         try:
             self.whoami = "client"
             
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            
+            s = None
+            if  self.is_udp:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            else:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                
             s = self.prepare_socket(s,False)
             
             ip = self.custom_ip
@@ -476,7 +494,12 @@ class Repeater:
             t = ip.split(":")
             if len(t) > 1:
                 ip = t[0]
-                port = t[1]
+                port = int(t[1])
+                
+            if port == 0:
+                port = int(self.server_port)
+                
+            self.target = (ip,port)
 
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip,port))
             try:
@@ -506,26 +529,50 @@ class Repeater:
                 t = self.custom_ip.split(":")
                 if len(t) > 1:
                     ip = t[0]
-                    port = t[1]
+                    port = int(t[1])
+                        
                 elif len(t) == 1:
                     # assume it's port
-                    port = t[0]
+                    port = int(t[0])
+
+                # if specified port is 0, use original port in the capture
+                if port == 0:
+                    port = int(self.server_port)
                 
             self.whoami = "server"
             print_white_bright("IMPERSONATING SERVER, listening on %s:%s" % (ip,port,))
             
             server_address = (ip, int(port))
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            if  self.is_udp:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            else:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            #s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            
+            if not self.is_udp:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             
             s.bind(server_address)
-            s.listen(1)
+            
+            if not self.is_udp:
+                s.listen(1)
 
             while True:
                 print ("waiting for new connection...")
                 
-                conn, client_address = s.accept()
-                print ("accepted client from %s:%s" % (client_address[0],client_address[1]))
+                conn = None
+                client_address = ["",""]
+                
+                if not self.is_udp:
+                    conn, client_address = s.accept()
+                    self.target = client_address
+                    print ("accepted client from %s:%s" % (client_address[0],client_address[1]))
+                else:
+                    conn = s
+                    client_address == ["",""]
+                    
             
                 #flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -543,6 +590,8 @@ class Repeater:
                     conn.close()
                 except socket.error, e:
                     print_white_bright("\nConnection with %s:%s terminated: %s" % (client_address[0],client_address[1],e,))
+                    if self.is_udp:
+                        break
 
                 # reset it in both cases when Ctrl-C received, or connection was closed
                 self.packet_index = 0
@@ -553,6 +602,7 @@ class Repeater:
             return
         except socket.error, e:
             print_white_bright("Server error: %s" % (e,))
+            sys.exit(16)
 
 
 
@@ -582,7 +632,12 @@ class Repeater:
             return data
         else:
             self.tstamp_last_read = time.time()
-            return conn.recv(4096)
+            if not self.is_udp:
+                return conn.recv(4096)
+            else:
+                data, client_address = conn.recvfrom(4096)
+                self.target = client_address
+                return data
 
     def write(self,conn,data):
         
@@ -591,7 +646,10 @@ class Repeater:
             return conn.write(data)
         else:
             self.tstamp_last_write = time.time()
-            return conn.send(data)
+            if not self.is_udp:
+                return conn.send(data)
+            else:
+                return conn.sendto(data,self.target)
 
     def load_to_send(self,role,role_index):
         who = self
@@ -635,6 +693,10 @@ class Repeater:
     def select_wrapper(self,conn,no_writes):
         
         inputs = [conn,sys.stdin]
+        if self.nostdin:
+            #print_red_bright("STDIN not used")
+            inputs = [conn,]
+            
         outputs = [conn]    
         if no_writes:
             outputs.remove(conn)
@@ -679,8 +741,13 @@ class Repeater:
                     eof_notified = True
                     
                 if self.exitoneot:
+                    
+                    if self.whoami == "server":
+                        time.sleep(5)
+                    
                     print_red("Exiting on EOT")
-                    shutdown(conn)
+                    conn.shutdown(socket.SHUT_WR)
+                    conn.close()
                     sys.exit(0)
             
             r,w,e = self.select_wrapper(conn,write_end)
@@ -962,6 +1029,7 @@ def main():
     auto_group.add_argument('--noauto', required=False, action='store_true', help='toggle this to confirm each payload to be sent')
     auto_group.add_argument('--auto', nargs='?',required=False, type=float, default=5.0, help='let %(prog)s to send payload automatically each AUTO seconds (default: %(default)s)')
     var.add_argument('--exitoneot', required=False, action='store_true', help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
+    var.add_argument('--nostdin', required=False, action='store_true', help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1076,6 +1144,11 @@ def main():
                 option_auto_send = -1
             elif args.auto:
                 option_auto_send = args.auto
+                
+                if args.nostdin:
+                    print_red_bright("stdin will be unmonitored")
+                    r.nostdin = True
+                
             else:
                 # option_auto_send = 5
                 pass
@@ -1092,6 +1165,9 @@ def main():
                 r.impersonate('client')
 
             elif args.server:
+
+                if args.exitoneot:
+                    r.exitoneot = True
 
                 if len(args.server) > 0:
                     # arg type is '?' so no list there, just string
