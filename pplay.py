@@ -344,7 +344,7 @@ class Repeater:
                     
         return bytes
 
-    def list_smcap(self):
+    def list_smcap(self,args=None):
         
         fin = fileinput.input(files=[self.fnm,])
         for line in fin:
@@ -365,13 +365,44 @@ class Repeater:
                     dip = m.group(3)
                     sport = m.group(2)
                     dport = m.group(4)
-                    print_yellow("%s:%s -> %s:%s  (single connection per file in smcap files)" % (sip,sport,dip,dport))
                     
                     if sip.startswith("udp_"):
                         self.is_udp = True
                     
                     fin.close()
-                    return "%s:%s" % (sip,sport)
+                    
+                    n = sip.find("_")
+                    if n >= 0 and n < len(sip) - 1:
+                        sip = sip[n+1:]
+                        
+                    n = dip.find("_")
+                    if n >= 0 and n < len(dip) - 1:
+                        dip = dip[n+1:]
+                    
+                    if args:
+                        if args == "sip":
+                            print("%s" % (sip,))
+                            return sip
+                        elif args == "dip":
+                            print("%s" % (dip,))
+                            return dip
+                        elif args == "sport":
+                            print("%s" % (sport,))
+                            return sport
+                        elif args == "dport":
+                            print("%s" % (dport,))
+                            return dport
+                        elif args == "proto":
+                            if self.is_udp:
+                                print("udp")
+                                return "udp"
+                            else:
+                                print("tcp")
+                                return "tcp"
+                    
+                    else:
+                        print_yellow("%s:%s -> %s:%s  (single connection per file in smcap files)" % (sip,sport,dip,dport))
+                        return "%s:%s" % (sip,sport)
                 
                 
     def export_script(self,efile):
@@ -1018,6 +1049,7 @@ def main():
     group2.add_argument('--server', nargs='?', help='listen on port and replay server payload, accept incoming connections. Use IP:PORT or PORT')
     group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
     group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
+    group2.add_argument('--smprint', nargs=1,  help='print properties of the connection. Args: sip,sport,dip,dport,proto')
 
     ac_sniff = parser.add_argument_group("Filter on sniffer filtes (mandatory unless --script is used)")
     ac_sniff.add_argument('--connection', nargs=1, help='replay/export specified connection; use format <src_ip>:<sport>. IMPORTANT: it\'s SOURCE based to match unique flow!')
@@ -1034,18 +1066,19 @@ def main():
     args = parser.parse_args(sys.argv[1:])
 
     if args.version:
+        print_white_bright(title)
+        print_white(copyright)
+        print("")
         print_white_bright(pplay_version)
         sys.exit(0)
 
-    print_white_bright(title)
-    print_white(copyright)
-    print("")
 
     r = None
     if args.pcap:
         r = Repeater(args.pcap[0],"")
     elif args.smcap:
         r = Repeater(args.smcap[0],"")
+        
     elif args.list:
         pass
     elif args.script:
@@ -1063,6 +1096,15 @@ def main():
             
         sys.exit(0)
 
+    elif args.smprint:
+        if args.smcap:
+            pr = None
+            if args.smprint:
+                pr = args.smprint[0]
+                r.list_smcap(pr)
+                sys.exit(0)
+            
+        sys.exit(-1)
 
     # content is controlled by script
     if args.script:
