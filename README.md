@@ -33,7 +33,7 @@ $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471  --auto 2
 ```
 
-## Replaying SMCAP (smithproxy captures)
+# Replaying SMCAP (smithproxy captures)
 
 
 ### Run server pplay instance
