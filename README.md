@@ -16,7 +16,7 @@ Output is colored; RED means anything related to received stuff, GREEN everythin
 
 # Replaying PCAP #
 
-## List connections you have available
+#### List connections you have available
 ```
 $ pplay.py --pcap samples/post-chunked-response.pcap --list
 
@@ -24,35 +24,16 @@ $ pplay.py --pcap samples/post-chunked-response.pcap --list
 192.168.132.1:80 -> 10.0.0.20:59471 (starting at frame 1)
 ```
 
-### Run server side pplay instance 
+#### Run server side pplay instance 
 ```
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471 --auto 2
 ```
-### Run client side instance
+#### Run client side instance
 ```
 $ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471  --auto 2
 ```
 
-### Export data to "script" and possibly modify them
-```
-$ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
-
-Template python script has been exported to file stuff.py
-```
-
-### You can use "script" as the sniff file
-```
-$ sudo ./pplay.py  --script stuff --server
-$ ./pplay.py --client 127.0.0.1 --script stuff
-```
-
-### You can also wrap everything into SSL
-```
-$ sudo ./pplay.py  --script stuff --server --ssl
-$ ./pplay.py --client 127.0.0.1 --script stuff --ssl
-```
-
-## Using smithproxy captures (*.smcap files)
+## Replaying SMCAP (smithproxy captures)
 
 
 ### Run server pplay instance
