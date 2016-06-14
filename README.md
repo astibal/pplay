@@ -92,10 +92,24 @@ Hint: Smithproxy it's SSL mitm proxy written by me in C/C++, faking certificate 
 pplay also knows how to export data to a "script". This is extremely convenient to do if you are repeating the same test again and again, needing to change parts of the payload dynamically. Output script is in fact a python class, containing also all necessary data, no --pcap or --smcap arguments are needed anymore.
 
 You can produce script with --export <scriptname> (filename will be scriptname.py). You can then use it by --script scriptname (instead of --pcap or --smcap arguments).
+For example:
+
+```
+$ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
+
+Template python script has been exported to file stuff.py
+```
+
+#### You can use "script" as the sniff file (NOTE: missing .py in --script argument)
+```
+$ ./pplay.py  --script stuff --server 127.0.0.2:9999
+$ ./pplay.py --client 127.0.0.2:9999 --script stuff
+```
+
 
 Main purpose of it is the need of dynamic modification of the payload, or other "smart" stuff, that cannot be predicted and programmed for you in pplay directly.
 
-This is example of very simplistic script:
+#### Simplistic script example:
 
 
 ```
@@ -135,24 +149,6 @@ class PPlayScript:
 	    return None
 
 ```
-
-You can run it with following commands (you can use --ssl here too):
-
-**Server:**
-
-```
-$ sudo ~/bin/pplay.py --script simple --server 127.0.0.2:9999 
-```
-
-
-**Client:**
-
-```
-$ ~/bin/pplay.py --script simple --client 127.0.0.2:9999
-```
-
-
-This example will do what you would expect: pplay will start with client packet "C1", server "S1", client's "C2", just last server's "S2" response is enriched by script with custom string with date.
 
 As you might see this gives to your hands power to export existing payload with --export and modify it on the fly as you want. You can make a string templates from it and just paste values as desired, or you can write even quite complex code around!
 
