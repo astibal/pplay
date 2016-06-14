@@ -63,8 +63,8 @@ Template python script has been exported to file stuff.py
 
 #### You can use "script" as the sniff file (NOTE: missing .py in --script argument)
 ```
-$ ./pplay.py  --script stuff --server 127.0.0.2:9999
-$ ./pplay.py --client 127.0.0.2:9999 --script stuff
+$ ./pplay.py --script stuff --server 127.0.0.2:9999
+$ ./pplay.py --script stuff --client 127.0.0.2:9999 
 ```
 
 
