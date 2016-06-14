@@ -26,69 +26,30 @@ $ pplay.py --pcap samples/post-chunked-response.pcap --list
 
 #### Run server side pplay instance 
 ```
-$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471 --auto 2
+$ ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471
 ```
 #### Run client side instance
 ```
-$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471  --auto 2
+$ ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471
 ```
 
 # Replaying SMCAP (smithproxy captures)
 
 
-### Run server pplay instance
+#### Run server pplay instance
 ```
 $ sudo ./pplay.py  --server 127.0.0.2:9999 --smcap samples/smcap_sample.smcap  --ssl
                             listen on this IP:PORT                             optionally wrap it with SSL 
 ```
 
-### Run client pplay instance
+#### Run client pplay instance
 ```
 $ ./pplay.py --smcap samples/smcap_sample.smcap --client 127.0.0.2:9999 --ssl
                                                          connect here     optionally wrap payload with SSL
 ```
 
-## So ... typical task list is: ##
 
-*     get the pcap
-*     look inside using wireshark and remember/write down source IP and source port of connection you are interested in to be replayed
-*     run: pplay.py --pcap <your_file.pcap> --list ... to display flows to verify the above
-*     copy pcap file (and pplay!) to both server and client (you want probably Fortigate between them)
-*     Run pplay:
-*         on client run: pplay.py --pcap <your_file.pcap> --connection <src>:<sport> --client <server_pplay_ip>
-*         on server run: pplay.py --pcap <your_file.pcap> --connection <src>:<sport> --server (you might need to run it as the root or with sudo)
-*     Enjoy!
-
-# More details #
-PPlay forgets everything about original IP addresses. It's because you will be testing it in your lab testbed. Only thing it will remember is the the destination port, for server side pplay it's important, meaning the port where it should *listen* for incoming connections. But that's really it.
-
-Client-side pplay will connect to the server-side. Once connected, you will see on one side green hex data and on the other yellow hex data. For HTTP, the client-side would be typically green, since HTTP comes with the request first. On the line above green hex data you will also see e.g. "[1/2] (in sync) offer to send -->". In sync is important here. Those data should be sent now according to pcap.
-If you see yellow data, that side is not on it's turn, and you will not see also "(in sync)" above them.
-
-Yellow or green, pplay will act on behalf of you by default in 5 seconds => green data will be sent.
-Hint: you can set --noauto, or --auto <big_seconds> program argument to change autosend feature. This feature could be also toggled on/off during the operation with "i" command shortcut.
-
-
-## Commands ##
-Below hex data (green or yellow), there is some contextual help for you: pplay is waiting for your override action to it's default -- autosend. At the time being, you can enter:
-
-    "y" or hit <enter> to send data
-    "s" to skip them
-    "c" to send CR only
-    "l" to send LF only
-    "x" to send CR+LF characters
-    "i" to disable/enable autosend feature
-    "r" command to replace content of the payload with something else. 
-        It does have 'vi'-like syntax: r/POST/GET/0 will replace string "POST" with "GET". 
-        Trailing number means max. number of replacements, 0=all
-
-## Data sources ##
-PPlay also supports smithproxy output, just use --smcap instead of --pcap argument option.
-You can wrap the traffic into SSL, just use --ssl option. With smithproxy together, pplay is quite powerful pair of tools: you can easily replay "decrypted" smcap file from smithproxy and wrap it again into SSL to further test.
-
-Hint: Smithproxy it's SSL mitm proxy written by me in C/C++, faking certificate subject. It utilizes iptables TPROXY target. SSL traffic is signed by local CA and plaintext is logged into files.
-
-# Advanced usage - scripting #
+# Replaying PPlayScript #
 pplay also knows how to export data to a "script". This is extremely convenient to do if you are repeating the same test again and again, needing to change parts of the payload dynamically. Output script is in fact a python class, containing also all necessary data, no --pcap or --smcap arguments are needed anymore.
 
 You can produce script with --export <scriptname> (filename will be scriptname.py). You can then use it by --script scriptname (instead of --pcap or --smcap arguments).
@@ -151,6 +112,38 @@ class PPlayScript:
 ```
 
 As you might see this gives to your hands power to export existing payload with --export and modify it on the fly as you want. You can make a string templates from it and just paste values as desired, or you can write even quite complex code around!
+
+
+
+
+# More details #
+PPlay forgets everything about original IP addresses. It's because you will be testing it in your lab testbed. Only thing it will remember is the the destination port, for server side pplay it's important, meaning the port where it should *listen* for incoming connections. But that's really it.
+
+Client-side pplay will connect to the server-side. Once connected, you will see on one side green hex data and on the other yellow hex data. For HTTP, the client-side would be typically green, since HTTP comes with the request first. On the line above green hex data you will also see e.g. "[1/2] (in sync) offer to send -->". In sync is important here. Those data should be sent now according to pcap.
+If you see yellow data, that side is not on it's turn, and you will not see also "(in sync)" above them.
+
+Yellow or green, pplay will act on behalf of you by default in 5 seconds => green data will be sent.
+Hint: you can set --noauto, or --auto <big_seconds> program argument to change autosend feature. This feature could be also toggled on/off during the operation with "i" command shortcut.
+
+
+## Commands ##
+Below hex data (green or yellow), there is some contextual help for you: pplay is waiting for your override action to it's default -- autosend. At the time being, you can enter:
+
+    "y" or hit <enter> to send data
+    "s" to skip them
+    "c" to send CR only
+    "l" to send LF only
+    "x" to send CR+LF characters
+    "i" to disable/enable autosend feature
+    "r" command to replace content of the payload with something else. 
+        It does have 'vi'-like syntax: r/POST/GET/0 will replace string "POST" with "GET". 
+        Trailing number means max. number of replacements, 0=all
+
+## Data sources ##
+PPlay also supports smithproxy output, just use --smcap instead of --pcap argument option.
+You can wrap the traffic into SSL, just use --ssl option. With smithproxy together, pplay is quite powerful pair of tools: you can easily replay "decrypted" smcap file from smithproxy and wrap it again into SSL to further test.
+
+Hint: Smithproxy it's SSL mitm proxy written by me in C/C++, faking certificate subject. It utilizes iptables TPROXY target. SSL traffic is signed by local CA and plaintext is logged into files.
 
 # Requirements #
 Tool doesn't have too requirements. You have to have installed scapy and colorama python packages.
