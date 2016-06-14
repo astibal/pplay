@@ -88,8 +88,9 @@ You can wrap the traffic into SSL, just use --ssl option. With smithproxy togeth
 
 Hint: Smithproxy it's SSL mitm proxy written by me in C/C++, faking certificate subject. It utilizes iptables TPROXY target. SSL traffic is signed by local CA and plaintext is logged into files.
 
-## Advanced usage - scripting ##
+# Advanced usage - scripting #
 pplay also knows how to export data to a "script". This is extremely convenient to do if you are repeating the same test again and again, needing to change parts of the payload dynamically. Output script is in fact a python class, containing also all necessary data, no --pcap or --smcap arguments are needed anymore.
+
 You can produce script with --export <scriptname> (filename will be scriptname.py). You can then use it by --script scriptname (instead of --pcap or --smcap arguments).
 
 Main purpose of it is the need of dynamic modification of the payload, or other "smart" stuff, that cannot be predicted and programmed for you in pplay directly.
@@ -140,18 +141,14 @@ You can run it with following commands (you can use --ssl here too):
 **Server:**
 
 ```
-#!bash
-
-$ sudo ~/bin/pplay.py --script simple --server --ssl
+$ sudo ~/bin/pplay.py --script simple --server 127.0.0.2:9999 
 ```
 
 
 **Client:**
 
 ```
-#!bash
-
-$ ~/bin/pplay.py --script simple --client localhost --ssl
+$ ~/bin/pplay.py --script simple --client 127.0.0.2:9999
 ```
 
 
