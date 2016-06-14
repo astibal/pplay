@@ -54,20 +54,17 @@ $ ./pplay.py --client 127.0.0.1 --script stuff --ssl
 
 ## Using smithproxy captures (*.smcap files)
 
-### List connections
-```
-$ ./pplay.py  --smcap samples/smcap_sample.smcap --list
-ssl+insp_192.168.254.113:33069 -> ssl+insp_74.125.140.139:443  (single connection per file in smcap files)
-```
 
 ### Run server pplay instance
 ```
-$ sudo ./pplay.py  --server --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --ssl
-```
+$ sudo ./pplay.py  --server 127.0.0.2:9999 --smcap samples/smcap_sample.smcap  --ssl
+                            listen on this IP:PORT                             optionally wrap it with SSL 
+ ```
 
 ### Run client pplay instance
 ```
-$ ./pplay.py --smcap samples/smcap_sample.smcap --connection 192.168.254.113:33069 --client 127.0.0.1 --ssl
+$ ./pplay.py --smcap samples/smcap_sample.smcap --client 127.0.0.2:9999 --ssl
+                                                         connect here     optionally wrap payload with SSL
 ```
 
 ## So ... typical task list is: ##
