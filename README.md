@@ -14,7 +14,7 @@ All data about to be sent will be printed out to be confirmed by you. When recei
 Output is colored; RED means anything related to received stuff, GREEN everything to data to be sent, or YELLOW for command line and other data eligible to be sent in the future but not now. WHITE is usually program notifications. At the first sight pplay's output might look bit a messy, but colors really help.
 
 
-# Here is most typical use-cases you would probably want to run #
+# Replaying PCAP #
 
 ## List connections you have available
 ```
@@ -26,11 +26,11 @@ $ pplay.py --pcap samples/post-chunked-response.pcap --list
 
 ### Run server side pplay instance 
 ```
-$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server --connection 10.0.0.20:59471 --auto 2
+$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471 --auto 2
 ```
 ### Run client side instance
 ```
-$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.1 --connection 10.0.0.20:59471  --auto 2
+$ sudo ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471  --auto 2
 ```
 
 ### Export data to "script" and possibly modify them
@@ -59,7 +59,7 @@ $ ./pplay.py --client 127.0.0.1 --script stuff --ssl
 ```
 $ sudo ./pplay.py  --server 127.0.0.2:9999 --smcap samples/smcap_sample.smcap  --ssl
                             listen on this IP:PORT                             optionally wrap it with SSL 
- ```
+```
 
 ### Run client pplay instance
 ```
