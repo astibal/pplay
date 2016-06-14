@@ -154,3 +154,11 @@ Note: I am deciding to drop scapy in the future.
 Colorama is responsible for multiplatform coloring. On windows, unpack zip-file, run cmd and run python setup.py install. That should make it.
 
 I would recommend to run pplay in linux, I haven't tested it on Windows yet.
+
+
+
+
+# SMCAP2PCAP tool
+This tool is a bit hack. Basically it replays smcap file, while using tcpdump to sniff the traffic. There are dozens of reasons why you would like to convert smcap file to pcap. This is the tool for that purpose.
+
+Also, this tools is very basic. There is only argument it takes: smcap file. Name and location of the converted pcap will be printed out.
