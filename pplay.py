@@ -190,12 +190,36 @@ class Repeater:
             
             sip = i[IP].src
             dip = i[IP].dst
-            sport = str(i[TCP].sport)
-            dport = str(i[TCP].dport)
+            
+            proto = "TCP"
+
+            sport = ""
+            dport = ""
+
+            # TCP
+            try:
+                sport = str(i[TCP].sport)
+                dport = str(i[TCP].dport)
+            except IndexError, e:
+                proto = "UDP"
+               
+            # UDP
+            if proto == "UDP":
+                try:
+                    sport = str(i[UDP].sport)
+                    dport = str(i[UDP].dport)
+                except IndexError, e:
+                    proto = "Unknown"
+                  
+                  
+            # Unknown
+            if proto == "Unknown":
+                    continue
+            
 
             key = sip+":"+sport+" -> "+dip+":"+dport
             if key not in flows:
-                print_yellow("%s (starting at frame %d)" % (key,frame))
+                print_yellow("%s / %s (starting at frame %d)" % (proto,key,frame))
                 flows[key] = "yes"
 
 
