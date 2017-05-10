@@ -1092,14 +1092,22 @@ def main():
     ac_sniff = parser.add_argument_group("Filter on sniffer filtes (mandatory unless --script is used)")
     ac_sniff.add_argument('--connection', nargs=1, help='replay/export specified connection; use format <src_ip>:<sport>. IMPORTANT: it\'s SOURCE based to match unique flow!')
 
+
+    prot = parser.add_argument_group("Protocol options")
+    prot.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL')
+    prot.add_argument('--tcp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in TCP')
+    prot.add_argument('--udp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in UDP')
+    
     var = parser.add_argument_group("Various")
-    var.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL')
-    var.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
+    
     auto_group = var.add_mutually_exclusive_group()
     auto_group.add_argument('--noauto', required=False, action='store_true', help='toggle this to confirm each payload to be sent')
     auto_group.add_argument('--auto', nargs='?',required=False, type=float, default=5.0, help='let %(prog)s to send payload automatically each AUTO seconds (default: %(default)s)')
+    
+    prot.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
     var.add_argument('--exitoneot', required=False, action='store_true', help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
     var.add_argument('--nostdin', required=False, action='store_true', help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
+
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1185,6 +1193,12 @@ def main():
                 r.read_smcap(im_ip,im_port)
             elif args.pcap:
                 r.read_pcap(im_ip,im_port)
+                
+            if args.tcp:
+                r.is_udp = False
+            elif args.udp:
+                r.is_udp = True
+                
         
         elif args.smcap:
             # no --connection option setsockopt
