@@ -178,11 +178,13 @@ class Repeater:
             self.packets = self.scripter.packets
             self.origins = self.scripter.origins
 
-    def list_pcap(self):
+    def list_pcap(self, verbose=True):
         
         flows = {}
+        ident = {}
         frame = -1
         
+        print_yellow(">>> Connection list:")
         s = rdpcap(self.fnm)
         for i in s:
             
@@ -217,10 +219,22 @@ class Repeater:
                     continue
             
 
-            key = sip+":"+sport+" -> "+dip+":"+dport
+            key = proto+" / "+sip+":"+sport+" -> "+dip+":"+dport
+            ident1 = sip+":"+sport
+            ident2 = dip+":"+dport
+            
             if key not in flows:
-                print_yellow("%s / %s (starting at frame %d)" % (proto,key,frame))
+                if verbose:
+                    print_yellow("%s (starting at frame %d)" % (key,frame))
                 flows[key] = "yes"
+                ident[ident1] = proto
+                ident[ident2] = proto
+                
+        print_yellow("\n>>> Usable connection IDs:")
+        for unique_ident in ident.keys():
+            print_yellow(unique_ident)
+                
+                
 
 
     def read_pcap(self,im_ip, im_port):
