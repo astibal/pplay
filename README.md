@@ -1,9 +1,12 @@
+# Support #
+For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.
+
 # History #
 
 recently I've been in the need of reproducing some issue with DLP, while I was provided with pcap when DLP was not involved in the traffic flow and everything was working.
 Orignally I was trying to utilize netcat, however I've always ended up with some (my) mistake, or simply I just sent CR when it should have been CRLF... Reproduction was frankly tedious task.
 
-Then I gave up on manual work, and tried tcpreplay. This is really fantastic tool in case you want to replay *exactly* what you have in pcap. However I quickly realized that DLP is changing sequential numbers of inspected TCP traffic, so it couldn't have been used it too!! Looking around the net, I decided to write something myself which will help me now and next time it can help others too. That is how pplay was born.
+Then I gave up on manual work, and tried tcpreplay. This is really fantastic tool in case you want to replay *exactly* what you have in pcap. However I quickly realized that DLP is changing sequential numbers of inspected TCP traffic, so it couldn't have been used it too!! Looking around the net, I decided to write something myself which will help me now and next time it can help others too. 
 
 # Quick start #
 
