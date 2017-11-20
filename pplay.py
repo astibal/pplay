@@ -25,8 +25,10 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
+pplay_version = "1.5"
 
-pplay_version = "1.4"
+#EMBEDDED DATA BEGIN
+#EMBEDDED DATA END
 
 title='pplay - application payload player - %s' % (pplay_version,)
 copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
@@ -40,14 +42,14 @@ try:
     
     have_colorama = True
 except ImportError, e:
-    print('No colorama, enjoy.')
+    print('No colorama, enjoy.',file=sys.stderr)
     
 
 try:
     import ssl
     have_ssl = True
 except ImportError, e:
-    print('No SSL support!')
+    print('No SSL support!',file=sys.stderr)
 
 
 def str_time():
@@ -56,52 +58,52 @@ def str_time():
 
 def print_green_bright(what):
     if have_colorama:
-        print(Fore.GREEN + Style.BRIGHT + what)
+        print(Fore.GREEN + Style.BRIGHT + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_green(what):
     if have_colorama:
-        print(Fore.GREEN + what)
+        print(Fore.GREEN + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 
 def print_yellow_bright(what):
     if have_colorama:
-        print(Fore.YELLOW + Style.BRIGHT + what)
+        print(Fore.YELLOW + Style.BRIGHT + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_yellow(what):
     if have_colorama:
-        print(Fore.YELLOW + what)
+        print(Fore.YELLOW + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_red_bright(what):
     if have_colorama:
-        print(Fore.RED + Style.BRIGHT + what)
+        print(Fore.RED + Style.BRIGHT + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_red(what):
     if have_colorama:
-        print(Fore.RED + what)
+        print(Fore.RED + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_white_bright(what):
     if have_colorama:
-        print(Fore.WHITE + Style.BRIGHT + what)
+        print(Fore.WHITE + Style.BRIGHT + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 def print_white(what):
     if have_colorama:
-        print(Fore.WHITE + what)
+        print(Fore.WHITE + what,file=sys.stderr)
     else:
-        print(what)
+        print(what,file=sys.stderr)
 
 
 
@@ -419,28 +421,54 @@ class Repeater:
                     
                     if args:
                         if args == "sip":
-                            print("%s" % (sip,))
+                            print("%s" % (sip,),file=sys.stderr)
                             return sip
                         elif args == "dip":
-                            print("%s" % (dip,))
+                            print("%s" % (dip,),file=sys.stderr)
                             return dip
                         elif args == "sport":
-                            print("%s" % (sport,))
+                            print("%s" % (sport,),file=sys.stderr)
                             return sport
                         elif args == "dport":
-                            print("%s" % (dport,))
+                            print("%s" % (dport,),file=sys.stderr)
                             return dport
                         elif args == "proto":
                             if self.is_udp:
-                                print("udp")
+                                print("udp",file=sys.stderr)
                                 return "udp"
                             else:
-                                print("tcp")
+                                print("tcp",file=sys.stderr)
                                 return "tcp"
                     
                     else:
                         print_yellow("%s:%s -> %s:%s  (single connection per file in smcap files)" % (sip,sport,dip,dport))
                         return "%s:%s" % (sip,sport)
+             
+             
+    def export_self(self,efile):
+        
+        ssource = self.export_script(None)
+        out = ''
+
+        
+        with open(__file__) as f: 
+            lines = f.read().split('\n');
+            
+            for l in lines:
+                out += l
+                out += "\n"
+                #print("export line: %s" % (l))
+                if l == "#EMBEDDED DATA BEGIN":
+                    out += "\n"
+                    out += ssource
+                    out += "\n"
+                    
+                    import hashlib
+                    out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(ssource).hexdigest() + "\"\n"
+                    
+        with open(efile+".py","w") as o:
+            o.write(out)
+            print(efile+".py")
                 
                 
     def export_script(self,efile):
@@ -469,9 +497,15 @@ class Repeater:
         return None
         """
         
+        
+        if efile == None:
+            return c
+        
         f = open(efile+".py",'w')
         f.write(c)
         f.close()
+        
+        return None
 
     # for spaghetti lovers
     def impersonate(self,who):
@@ -637,7 +671,7 @@ class Repeater:
                 if not self.is_udp:
                     conn, client_address = s.accept()
                     self.target = client_address
-                    print ("accepted client from %s:%s" % (client_address[0],client_address[1]))
+                    print("accepted client from %s:%s" % (client_address[0],client_address[1]),file=sys.stderr)
                 else:
                     conn = s
                     client_address == ["",""]
@@ -812,7 +846,7 @@ class Repeater:
                 if self.exitoneot:
                     
                     if self.whoami == "server":
-                        time.sleep(5)
+                        time.sleep(0.5)
                     
                     print_red("Exiting on EOT")
                     conn.shutdown(socket.SHUT_WR)
@@ -937,7 +971,7 @@ class Repeater:
                             delta = now - self._last_countdown_print
                             # print out the dot
                             if delta >= 1:
-                                print(".",end='')
+                                print(".",end='',file=sys.stderr)
                                 self._last_countdown_print = now                            
 
                             if now - auto_send_now >= option_auto_send:
@@ -1078,7 +1112,7 @@ def main():
     group1 = ds.add_mutually_exclusive_group()
     group1.add_argument('--pcap', nargs=1, help='pcap where the traffic should be read (retransmissions not checked)')
     group1.add_argument('--smcap', nargs=1, help='textual capture taken by smithproxy')
-    group1.add_argument('--script', nargs=1, help='EXPERIMENTAL: load python script previously generated by --export command; Expect API changes.')
+    group1.add_argument('--script', nargs=1, help='load python script previously generated by --export command, OR use + to indicate script is embedded into source. See --pack option.')
 
 
     ac = parser.add_argument_group("Actions")
@@ -1087,6 +1121,7 @@ def main():
     group2.add_argument('--server', nargs='?', help='listen on port and replay server payload, accept incoming connections. Use IP:PORT or PORT')
     group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
     group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
+    group2.add_argument('--pack', nargs=1, help='pack packet data into the script itself. Good for automation.')
     group2.add_argument('--smprint', nargs=1,  help='print properties of the connection. Args: sip,sport,dip,dport,proto')
 
     ac_sniff = parser.add_argument_group("Filter on sniffer filtes (mandatory unless --script is used)")
@@ -1114,7 +1149,7 @@ def main():
     if args.version:
         print_white_bright(title)
         print_white(copyright)
-        print("")
+        print("",file=sys.stderr)
         print_white_bright(pplay_version)
         sys.exit(0)
 
@@ -1133,6 +1168,16 @@ def main():
         print_red_bright("error: no file to parse!")
         sys.exit(-1)
 
+
+    if r != None:
+        if args.tcp:
+            r.is_udp = False
+
+        if args.udp:
+            r.is_udp = True        
+
+        if args.ssl:
+            r.use_ssl = True
 
     if args.list:
         if args.smcap:
@@ -1154,19 +1199,25 @@ def main():
 
     # content is controlled by script
     if args.script:
+        
         try:
-            # add current directory into PYTHONPATH
-            sys.path.append(os.getcwd())
             
-            # if there is path specified in the script filename, add it to PYTHONPATH too
-            if os.path.dirname(args.script[0]) != '':
-                sys.path.append(os.path.dirname(args.script[0]))
+            if args.script[0] != "+":
+                # add current directory into PYTHONPATH
+                sys.path.append(os.getcwd())
                 
-            print_white_bright("Loading custom script: %s (pwd=%s)" % (args.script[0],os.getcwd()))
-            g_script_module = __import__(os.path.basename(args.script[0]),globals(),locals(),[],-1)
+                # if there is path specified in the script filename, add it to PYTHONPATH too
+                if os.path.dirname(args.script[0]) != '':
+                    sys.path.append(os.path.dirname(args.script[0]))
+                    
+                print_white_bright("Loading custom script: %s (pwd=%s)" % (args.script[0],os.getcwd()))
+                g_script_module = __import__(os.path.basename(args.script[0]),globals(),locals(),[],-1)
 
-            r.scripter = g_script_module.PPlayScript(r)
-            r.load_scripter_defaults()
+                r.scripter = g_script_module.PPlayScript(r)
+                r.load_scripter_defaults()
+            else:
+                r.scripter = PPlayScript(r)
+                r.load_scripter_defaults()
         
         except ImportError, e:
             print_red_bright("Error loading script file: %s" % (str(e),))
@@ -1176,7 +1227,7 @@ def main():
             print_red_bright("Error loading script file: %s" % (str(e),))
             sys.exit(-2)
 
-    if args.export or args.client or args.server:
+    if args.export or args.pack or args.client or args.server:
         if args.connection:
             l = args.connection[0].split(":")
             im_ip = None
@@ -1224,6 +1275,14 @@ def main():
             r.export_script(export_file)
             print_white_bright("Template python script has been exported to file %s.py" % (export_file,))
             sys.exit(0)
+
+        elif args.pack:   
+            pack_file = args.pack[0]
+            
+            r.export_self(pack_file)
+            print_white_bright("Exporting self to file %s.py" % (pack_file,))
+            sys.exit(0)
+
 
         # ok regardless data controlled by script or capture file read
         elif args.client or args.server:
