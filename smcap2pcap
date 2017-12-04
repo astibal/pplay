@@ -14,20 +14,22 @@ PORT="0"
 #O=`echo "$FNM" | sed -e "s/\.smcap/\.pcap/"`
 echo "output file: $O"
 
-PPORT=`pplay --smcap $FNM --smprint dport 2>/dev/null`
+PPORT=`pplay --smcap $FNM --smprint dport 2>&1 | grep -v "^WARNING"`
+echo "Detected destination port: $PPORT"
+
 
 # detect colliding ports:
 RGX=`netstat -nap | grep 'LISTEN ' | grep '\(0.0.0.0\|127.0.0.2\):[0-9]\+' | awk '{ print $4 }' | sed -e 's/::/0/g' | awk -F: '{ print $2 }' | sort -n | uniq | tr '\n' '|' | sed -e 's/|/\\|/g' | sed -e 's/|$//'`
 
-PORT=$PPORT
+PORT="$PPORT"
 while :; do
     echo "$PORT" | egrep "$RGX"
     if [ "$?" = "0" ] 
     then
-        echo 'port $PORT is in collision with already opened port'
+        echo "port $PORT is in collision with already opened port"
         PORT=$((1024 + `tr -cd 0-9 </dev/urandom | head -c 4`))
     else
-        echo 'using destination port $PORT'
+        echo "using destination port '$PORT'"
         break
     fi
 done
