@@ -117,7 +117,34 @@ class PPlayScript:
 As you might see this gives to your hands power to export existing payload with --export and modify it on the fly as you want. You can make a string templates from it and just paste values as desired, or you can write even quite complex code around!
 
 
+# Creating and using self-contained package #
+This feature is extremely useful for automation. You can use SMCAP, PCAP or pplayscript, embed it into pplay itself, 
+and use this self-contained pplay version by executing it over the SSH (or the other way, SSH is just the most obvious). 
 
+The rest is just the same normal pplay. Please note that pplay over ssh needs a bit different approach, so we execute it with:
+
+*  --nostdin - (it's already used by SSH) 
+*  --auto - will make transaction waiting times a fraction of second
+*  --script +     this will instruct to *play embedded pplayscript**
+*  --exitoneot  - once we received/sent last message in the transaction, exit.
+
+## Launch embedded server
+...
+# pack smcap file into pplay, resulting file in /tmp/smbla.py -- smbla.py will contain pplay and also data from provided smcap file
+pplay.py --smcap samples/smcap_sample.smcap --pack /tmp/smbla
+
+# launch server (on r32 host, options suitable for automation), using packed pplay:
+ssh r32 python - --script + --server 8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
+
+...
+
+## Launch embbedded client
+...
+python - --script + --client 10.16.16.1:8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
+...
+
+Please note that you need to have installed python-scapy on both remote servers. Of course, SSH needs to be reachable (i.e. you need to create firewall pin-holes for it).
+Also for (and only for) the automation you might want to create ssh key without the passphrase.
 
 # More details #
 PPlay forgets everything about original IP addresses. It's because you will be testing it in your lab testbed. Only thing it will remember is the the destination port, for server side pplay it's important, meaning the port where it should *listen* for incoming connections. But that's really it.
