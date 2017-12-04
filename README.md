@@ -129,19 +129,17 @@ The rest is just the same normal pplay. Please note that pplay over ssh needs a 
 *  --exitoneot  - once we received/sent last message in the transaction, exit.
 
 ## Launch embedded server
-...
-# pack smcap file into pplay, resulting file in /tmp/smbla.py -- smbla.py will contain pplay and also data from provided smcap file
+
+Pack smcap file into pplay, resulting file in /tmp/smbla.py -- smbla.py will contain pplay and also data from provided smcap file and launch server (on r32 host, options suitable for automation), using packed pplay:
+```
 pplay.py --smcap samples/smcap_sample.smcap --pack /tmp/smbla
-
-# launch server (on r32 host, options suitable for automation), using packed pplay:
 ssh r32 python - --script + --server 8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
-
-...
+```
 
 ## Launch embbedded client
-...
+```
 python - --script + --client 10.16.16.1:8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
-...
+```
 
 Please note that you need to have installed python-scapy on both remote servers. Of course, SSH needs to be reachable (i.e. you need to create firewall pin-holes for it).
 Also for (and only for) the automation you might want to create ssh key without the passphrase.
