@@ -25,7 +25,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.5"
+pplay_version = "1.6"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -159,6 +159,12 @@ class Repeater:
         
         
         self.use_ssl = False
+        self.sslv = 0
+        self.ssl_context = None
+        self.ssl_cipher = None
+        self.ssl_sni = None
+        self.ssl_alpn = None
+        self.ssl_ecdh_curve = None
 
         self.tstamp_last_read = 0
         self.tstamp_last_write = 0
@@ -567,13 +573,47 @@ class Repeater:
     def prepare_socket(self, s, server_side=False):
         if have_ssl and self.use_ssl:
             if not server_side:
-                return ssl.wrap_socket(s,ca_certs="certs/ca-cert.pem")
+                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+                
+                if self.sslv > 0:
+                    sv = 3
+                    self.ssl_context.options |= ssl.OP_NO_SSLv2
+                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2 ]:
+                        if sv == self.sslv:
+                            sv = sv + 1
+                            continue
+                        
+                        self.ssl_context.options |= v
+                        sv = sv + 1
+                        
+                if self.ssl_cipher:
+                    self.ssl_context.set_ciphers(self.ssl_cipher)
+                    
+                if self.ssl_alpn:
+                    self.ssl_context.set_alpn_protocols(self.ssl_alpn)
+                    
+                return self.ssl_context.wrap_socket(s,server_hostname=self.ssl_sni)
             else:
-                return ssl.wrap_socket(s,
-                                 server_side=True,
-                                 certfile="certs/srv-cert.pem",
-                                 keyfile="certs/srv-key.pem",
-                                 ssl_version=ssl.PROTOCOL_TLSv1)                
+                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+                if self.sslv > 0:
+                    sv = 3
+                    self.ssl_context.options |= ssl.OP_NO_SSLv2
+                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2 ]:
+                        if sv == self.sslv:
+                            sv = sv + 1
+                            continue
+                        
+                        self.ssl_context.options |= v
+                        sv = sv + 1                
+
+                if self.ssl_cipher:
+                    self.ssl_context.set_ciphers(self.ssl_cipher)
+                    
+                if self.ssl_ecdh_curve:
+                    self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
+                
+                self.ssl_context.load_cert_chain(certfile="certs/srv-cert.pem",keyfile="certs/srv-key.pem")
+                return self.ssl_context.wrap_socket(s,server_side=True)                
         else:
             return s
                 
@@ -1129,9 +1169,25 @@ def main():
 
 
     prot = parser.add_argument_group("Protocol options")
-    prot.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL')
+    prot.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL (defaults to library ... default)')
     prot.add_argument('--tcp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in TCP')
     prot.add_argument('--udp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in UDP')
+    
+    prot_ssl = parser.add_argument_group("SSL protocol options")
+    prot.add_argument('--ssl3', required=False, action='store_true', help='ssl3 ... won\'t be supported by library most likely')
+    prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
+    prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
+    prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
+    
+    #if ssl.HAS_TLSv1_3:
+    #    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
+    
+    prot_ssl = parser.add_argument_group("SSL cipher support")
+    prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
+    prot_ssl.add_argument('--sni', required=False, nargs=1, help='specify remote server name (SNI extension, client only)')
+    prot_ssl.add_argument('--alpn', required=False, nargs=1, help='specify comma-separated next-protocols for ALPN extension (client only)')
+    prot_ssl.add_argument('--ecdh_curve', required=False, nargs=1, help='specify ECDH curve name')
+    
     
     var = parser.add_argument_group("Various")
     
@@ -1178,6 +1234,31 @@ def main():
 
         if args.ssl:
             r.use_ssl = True
+            
+            if args.ssl3:
+                r.sslv = 3
+            if args.tls1:
+                r.sslv = 4
+            if args.tls1_1:
+                r.sslv = 5
+            if args.tls1_2:
+                r.sslv = 6
+            #if args.tls1_3:
+            #    r.sslv = 7
+            
+            if args.cipher:
+                r.ssl_cipher = ":".join(args.cipher)
+                
+            if args.sni:
+                r.ssl_sni = args.sni[0]
+                
+            if args.alpn:
+                r.ssl_alpn = args.alpn[0].split(',')
+                
+            if args.ecdh_curve:
+                r.ssl_ecdh_curve = args.ecdh_curve[0]
+                
+                
 
     if args.list:
         if args.smcap:
