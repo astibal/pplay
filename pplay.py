@@ -165,6 +165,9 @@ class Repeater:
         self.ssl_sni = None
         self.ssl_alpn = None
         self.ssl_ecdh_curve = None
+        self.ssl_cert = None
+        self.ssl_key = None
+        
 
         self.tstamp_last_read = 0
         self.tstamp_last_write = 0
@@ -598,7 +601,7 @@ class Repeater:
                 if self.sslv > 0:
                     sv = 3
                     self.ssl_context.options |= ssl.OP_NO_SSLv2
-                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2 ]:
+                    for v in [ ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2 ]:
                         if sv == self.sslv:
                             sv = sv + 1
                             continue
@@ -612,7 +615,7 @@ class Repeater:
                 if self.ssl_ecdh_curve:
                     self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
                 
-                self.ssl_context.load_cert_chain(certfile="certs/srv-cert.pem",keyfile="certs/srv-key.pem")
+                self.ssl_context.load_cert_chain(certfile=self.ssl_cert,keyfile=self.ssl_key)
                 return self.ssl_context.wrap_socket(s,server_side=True)                
         else:
             return s
@@ -1183,6 +1186,9 @@ def main():
     #    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
     
     prot_ssl = parser.add_argument_group("SSL cipher support")
+    prot_ssl.add_argument('--cert', required=False, nargs=1, help='certificate (PEM format) for --server mode')
+    prot_ssl.add_argument('--key', required=False, nargs=1, help='key of certificate (PEM format) for --server mode')
+    
     prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
     prot_ssl.add_argument('--sni', required=False, nargs=1, help='specify remote server name (SNI extension, client only)')
     prot_ssl.add_argument('--alpn', required=False, nargs=1, help='specify comma-separated next-protocols for ALPN extension (client only)')
@@ -1245,6 +1251,13 @@ def main():
                 r.sslv = 6
             #if args.tls1_3:
             #    r.sslv = 7
+            
+            if args.cert:
+                r.ssl_cert = args.cert[0]
+
+            if args.key:
+                r.ssl_key = args.key[0]
+            
             
             if args.cipher:
                 r.ssl_cipher = ":".join(args.cipher)
@@ -1371,6 +1384,14 @@ def main():
                 if not have_ssl:
                     print_red_bright("error: SSL not available!")
                     sys.exit(-1)
+                
+                if args.server:
+                    if not args.key:
+                        print_red_bright("error: SSL server requires --key argument")
+                        sys.exit(-1)
+                    if not args.cert:
+                        print_red_bright("error: SSL server requires --cert argument")
+                        sys.exit(-1)
                 
                 r.use_ssl = True
 
