@@ -14,6 +14,7 @@ import fileinput
 import binascii
 import datetime
 import pprint
+import atexit
 
 from scapy.all import *
 from select import select
@@ -35,6 +36,7 @@ copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
 
 
 g_script_module = None
+g_delete_files = []
 
 try:
     import colorama
@@ -184,10 +186,36 @@ class Repeater:
         self.target = (0,0)
 
     def load_scripter_defaults(self):
+        global g_delete_files
+        
+        import tempfile
+        
         if self.scripter:
             self.server_port = self.scripter.server_port
             self.packets = self.scripter.packets
             self.origins = self.scripter.origins
+
+            
+            if self.scripter.ssl_cert and not self.ssl_cert:
+                h,fnm = tempfile.mkstemp()
+                o = os.fdopen(h,"w")
+                o.write(self.scripter.ssl_cert)
+                o.close()
+                
+                self.ssl_cert = fnm
+                g_delete_files.append(fnm)
+                
+            if self.scripter.ssl_key and not self.ssl_key:
+                h,fnm = tempfile.mkstemp()
+                o = os.fdopen(h,"w")
+                o.write(self.scripter.ssl_key)
+                o.close()
+                
+                self.ssl_key = fnm
+                g_delete_files.append(fnm)
+                
+                
+            
 
     def list_pcap(self, verbose=True):
         
@@ -461,7 +489,7 @@ class Repeater:
 
         
         with open(__file__) as f: 
-            lines = f.read().split('\n');
+            lines = f.read().split('\n')
             
             for l in lines:
                 out += l
@@ -474,10 +502,13 @@ class Repeater:
                     
                     import hashlib
                     out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(ssource).hexdigest() + "\"\n"
+
                     
-        with open(efile+".py","w") as o:
+        with open(efile,"w") as o:
             o.write(out)
-            print(efile+".py")
+            print(efile)
+            
+            
                 
                 
     def export_script(self,efile):
@@ -496,6 +527,15 @@ class Repeater:
             c+= "        self.origins['%s']=%s\n" % (k,self.origins[k])
             
         c+="\n\n"
+        if self.ssl_cert:
+            with open(self.ssl_cert) as ca_f:
+                c += "        self.ssl_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
+                
+        if self.ssl_key:
+            with open(self.ssl_key) as key_f:
+                c += "        self.ssl_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
+                
+        c+="\n\n"
         c+="""
     def before_send(self,role,index,data):
         # when None returned, no changes will be applied and packets[ origins[role][index] ] will be used
@@ -507,10 +547,11 @@ class Repeater:
         """
         
         
+        
         if efile == None:
             return c
         
-        f = open(efile+".py",'w')
+        f = open(efile,'w')
         f.write(c)
         f.close()
         
@@ -1305,7 +1346,11 @@ def main():
                     sys.path.append(os.path.dirname(args.script[0]))
                     
                 print_white_bright("Loading custom script: %s (pwd=%s)" % (args.script[0],os.getcwd()))
-                g_script_module = __import__(os.path.basename(args.script[0]),globals(),locals(),[],-1)
+                
+                mod_name = args.script[0]
+                if mod_name.endswith(".py"):
+                    mod_name = mod_name[0:-3]
+                g_script_module = __import__(os.path.basename(mod_name),globals(),locals(),[],-1)
 
                 r.scripter = g_script_module.PPlayScript(r)
                 r.load_scripter_defaults()
@@ -1364,17 +1409,30 @@ def main():
             sys.exit(-1)
         
         # cannot collide with script - those are in the exclusive argparse group
-        if args.export:   
+        if args.export:
+            
+            if args.cert:
+                r.ssl_cert = args.cert[0]
+
+            if args.key:
+                r.ssl_key = args.key[0]            
+            
             export_file = args.export[0]
             r.export_script(export_file)
-            print_white_bright("Template python script has been exported to file %s.py" % (export_file,))
+            print_white_bright("Template python script has been exported to file %s" % (export_file,))
             sys.exit(0)
 
         elif args.pack:   
             pack_file = args.pack[0]
             
+            if args.cert:
+                r.ssl_cert = args.cert[0]
+
+            if args.key:
+                r.ssl_key = args.key[0]            
+            
             r.export_self(pack_file)
-            print_white_bright("Exporting self to file %s.py" % (pack_file,))
+            print_white_bright("Exporting self to file %s" % (pack_file,))
             sys.exit(0)
 
 
@@ -1386,10 +1444,10 @@ def main():
                     sys.exit(-1)
                 
                 if args.server:
-                    if not args.key:
+                    if not args.key and not args.script:
                         print_red_bright("error: SSL server requires --key argument")
                         sys.exit(-1)
-                    if not args.cert:
+                    if not args.cert and not args.script:
                         print_red_bright("error: SSL server requires --cert argument")
                         sys.exit(-1)
                 
@@ -1438,5 +1496,19 @@ def main():
     #parser.print_help()
 
 
+def cleanup():
+    global g_delete_files
+    for f in g_delete_files:
+        try:
+            print_white("unlink embedded tempfile - %s" % (f,))
+            os.unlink(f)
+        except OSError, e:
+            pass
+    
+import atexit
+
+
 if __name__ == "__main__":
+    
+    atexit.register(cleanup)
     main()
