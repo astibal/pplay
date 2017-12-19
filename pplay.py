@@ -26,7 +26,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.6.1"
+pplay_version = "1.6.2"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -179,6 +179,7 @@ class Repeater:
         
         self.exitoneot = False
         self.nostdin = False
+        self.nohexdump = False
 
         self.is_udp = False
         
@@ -587,6 +588,8 @@ class Repeater:
         aligned = ''
         if self.send_aligned():
             aligned = '(in-sync'
+        else:
+            aligned = '(off-sync'
         
         if not self.send_issame():
             if aligned:
@@ -597,20 +600,44 @@ class Repeater:
         if aligned:
             aligned+=") "
         
-        print_yellow_bright("# [%d/%d]: %soffer to send -->" % (self.packet_index+1,len(self.origins[self.whoami]),aligned))
-        out = hexdump(str(data))
-        if aligned:
+        
+        out = "# [%d/%d]: %s" % (self.packet_index+1,len(self.origins[self.whoami]),aligned)
+        if self.send_aligned():
+            print_green_bright(out)
+        else:
+            print_yellow(out)
+        
+        out = ''
+        if self.nohexdump:
+            out = "# ... offer to send %dB of data (hexdump surpressed): " % (len(data),)
+        else:
+            out = hexdump(str(data))
+
+        if self.send_aligned():
             print_green(out)
         else:
             print_yellow(out)
-        print_yellow_bright("#<--")
         
-        print_yellow_bright("#--> SEND IT TO SOCKET? [ y=yes (default) | s=skip | c=CR | l=LF | x=CRLF ]")
-        print_yellow_bright("#    For more commands or help please enter 'h'.")
+        
+        if option_auto_send < 0 or option_auto_send >= 5:
+            
+            out = ''
+            out += "#<--\n"
+            out += "#--> SEND IT TO SOCKET? [ y=yes (default) | s=skip | c=CR | l=LF | x=CRLF ]\n"
+            out += "#    For more commands or help please enter 'h'.\n"
+
+            if self.send_aligned():
+                print_green_bright(out)
+            else:
+                print_yellow(out)
+                
+                
 
 
     def ask_to_send_more(self):
-        print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF | N=new data]")
+        
+        if not self.nostdin:
+            print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF | N=new data]")
         #print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
 
 
@@ -689,9 +716,11 @@ class Repeater:
             self.target = (ip,port)
 
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip,port))
+            
+            self.sock = s
             try:
                 s.connect((ip,int(port)))
-                self.packet_loop(s)
+                self.packet_loop(self.sock)
                 
             except socket.error,e:
                 print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
@@ -765,6 +794,7 @@ class Repeater:
                 sys.stdin.flush()
             
                 conn = self.prepare_socket(conn,True)
+                self.sock = conn
             
                 try:
                     if g_script_module:
@@ -865,9 +895,9 @@ class Repeater:
                 data_len = len(self.to_send)
 
                 if cnt == data_len:
-                    print_green_bright("# %s [%d/%d]: has been sent (%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt))
+                    print_green_bright("# ... %s [%d/%d]: has been sent (%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt))
                 else:
-                    print_green_bright("# %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt,data_len))
+                    print_green_bright("# ... %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (str_time(),self.packet_index,len(self.origins[self.whoami]),cnt,data_len))
                     self.to_send = str(self.to_send)[cnt:]
                 
                 total_written += cnt
@@ -910,6 +940,9 @@ class Repeater:
 
             return  select(inputs,outputs,[],0.2)
 
+    def is_eot(self):
+        return self.total_packet_index >= len(self.packets)
+
     def packet_loop(self,conn):
         global option_auto_send
 
@@ -922,7 +955,7 @@ class Repeater:
             time.sleep(0.2)
             #print_red(".")
             
-            if self.total_packet_index >= len(self.packets):
+            if self.is_eot():
                 if not eof_notified:
                     print_red_bright("### END OF TRANSMISSION ###")
                     eof_notified = True
@@ -930,7 +963,13 @@ class Repeater:
                 if self.exitoneot:
                     
                     if self.whoami == "server":
-                        time.sleep(0.5)
+                        if option_auto_send >= 0:
+                            time.sleep(option_auto_send)
+                        else:
+                            time.sleep(0.5)
+                    
+                    if self.ssl_context:
+                        self.sock.unwrap()
                     
                     print_red("Exiting on EOT")
                     conn.shutdown(socket.SHUT_WR)
@@ -967,20 +1006,20 @@ class Repeater:
                     if str(d) == str(self.packets[self.total_packet_index]):
                         aligned = True
                         self.total_packet_index += 1
-                        print_red_bright("# %s: received %dB OK%s" % (str_time(),len(d),scripter_flag))
+                        print_red_bright("# ... %s: received %dB OK%s" % (str_time(),len(d),scripter_flag))
                     
                     else:
                         smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index-1]),autojunk=False)
                         qr = smatch.ratio()
                         if qr > 0.05:
-                            print_red_bright("# %s received %sB modified (%.1f%%)%s" % (str_time(),len(d),qr*100,scripter_flag))                    
+                            print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(),len(d),qr*100,scripter_flag))                    
                             self.total_packet_index += 1
                         else:
-                            print_red_bright("# %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
+                            print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
                     
                     if self.scripter:
                         self.scripter.after_received(self.whoami,self.packet_index,str(d))
-                        print_red_bright("# received data processed")
+                        #print_red_bright("# received data processed")
                     
                     # this block is printed while in the normal packet loop (there are packets still to receive or send
                     if aligned:
@@ -1011,7 +1050,6 @@ class Repeater:
             if conn in w:
             
                 if self.packet_index >= len(self.origins[self.whoami]):
-                    print_yellow_bright("# Nothing left to send, hit Ctrl-C to interrupt whenever needed.")
                     print_yellow_bright("# [EOT]")
                     self.ask_to_send_more()
                     # if we have nothing to send, remove conn from write set
@@ -1055,11 +1093,19 @@ class Repeater:
                             delta = now - self._last_countdown_print
                             # print out the dot
                             if delta >= 1:
-                                print(".",end='',file=sys.stderr)
+                                
+                                # print dot only if there some few seconds to indicate
+                                if option_auto_send >= 5:
+                                    print(".",end='',file=sys.stderr)
+                                    
                                 self._last_countdown_print = now                            
 
                             if now - auto_send_now >= option_auto_send:
-                                print_green_bright(" -> sending!")
+                                
+                                # indicate sending only when there are few seconds to indicate
+                                if option_auto_send >= 5:
+                                    print_green_bright("  ... sending!")
+                                    
                                 self.send_to_send(conn)
                                 auto_send_now = now
 
@@ -1245,6 +1291,7 @@ def main():
     prot.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
     var.add_argument('--exitoneot', required=False, action='store_true', help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
     var.add_argument('--nostdin', required=False, action='store_true', help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
+    var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
 
 
     args = parser.parse_args(sys.argv[1:])
@@ -1280,6 +1327,10 @@ def main():
             r.is_udp = True        
 
         if args.ssl:
+            if args.udp:
+                print_red_bright("No DTLS support in python ssl wrappers, sorry.")
+                sys.exit(-1)
+                
             r.use_ssl = True
             
             if args.ssl3:
@@ -1311,6 +1362,7 @@ def main():
                 
             if args.ecdh_curve:
                 r.ssl_ecdh_curve = args.ecdh_curve[0]
+
                 
                 
 
@@ -1465,6 +1517,10 @@ def main():
             else:
                 # option_auto_send = 5
                 pass
+            
+            
+            if args.nohex:
+                r.nohexdump = True
             
             
             if args.client:
