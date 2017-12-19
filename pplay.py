@@ -26,7 +26,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.6"
+pplay_version = "1.6.1"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
