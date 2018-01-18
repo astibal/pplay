@@ -230,8 +230,12 @@ class Repeater:
             
             frame+=1
             
-            sip = i[IP].src
-            dip = i[IP].dst
+            try:
+                sip = i[IP].src
+                dip = i[IP].dst
+            except IndexError, e:
+                # not even IP packet
+                continue
             
             proto = "TCP"
 
