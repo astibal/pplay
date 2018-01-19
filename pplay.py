@@ -26,7 +26,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.6.2"
+pplay_version = "1.6.3"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -196,24 +196,32 @@ class Repeater:
             self.packets = self.scripter.packets
             self.origins = self.scripter.origins
 
+
+            has_cert = False
+            try:
+                if self.scripter.ssl_cert and self.scripter.ssl_key:
+                    has_cert = True
+            except Exception, e:
+                print ("Script ssl certs: %s" % str(e))
             
-            if self.scripter.ssl_cert and not self.ssl_cert:
-                h,fnm = tempfile.mkstemp()
-                o = os.fdopen(h,"w")
-                o.write(self.scripter.ssl_cert)
-                o.close()
-                
-                self.ssl_cert = fnm
-                g_delete_files.append(fnm)
-                
-            if self.scripter.ssl_key and not self.ssl_key:
-                h,fnm = tempfile.mkstemp()
-                o = os.fdopen(h,"w")
-                o.write(self.scripter.ssl_key)
-                o.close()
-                
-                self.ssl_key = fnm
-                g_delete_files.append(fnm)
+            if has_cert:
+                if self.scripter.ssl_cert and not self.ssl_cert:
+                    h,fnm = tempfile.mkstemp()
+                    o = os.fdopen(h,"w")
+                    o.write(self.scripter.ssl_cert)
+                    o.close()
+                    
+                    self.ssl_cert = fnm
+                    g_delete_files.append(fnm)
+                    
+                if self.scripter.ssl_key and not self.ssl_key:
+                    h,fnm = tempfile.mkstemp()
+                    o = os.fdopen(h,"w")
+                    o.write(self.scripter.ssl_key)
+                    o.close()
+                    
+                    self.ssl_key = fnm
+                    g_delete_files.append(fnm)
                 
                 
             
