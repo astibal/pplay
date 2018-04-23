@@ -26,7 +26,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.6.3"
+pplay_version = "1.6.4"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -180,6 +180,9 @@ class Repeater:
         self.exitoneot = False
         self.nostdin = False
         self.nohexdump = False
+        
+        self.omexit = False
+        
 
         self.is_udp = False
         
@@ -862,9 +865,9 @@ class Repeater:
         else:
             self.tstamp_last_read = time.time()
             if not self.is_udp:
-                return conn.recv(4096)
+                return conn.recv(24096)
             else:
-                data, client_address = conn.recvfrom(4096)
+                data, client_address = conn.recvfrom(24096)
                 self.target = client_address
                 return data
 
