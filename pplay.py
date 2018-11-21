@@ -55,7 +55,7 @@ except ImportError, e:
 
 
 def str_time():
-    t = datetime.datetime.now()
+    t = datetime.now()
     return str(t)
 
 def print_green_bright(what):
@@ -678,7 +678,7 @@ class Repeater:
                 if self.ssl_alpn:
                     self.ssl_context.set_alpn_protocols(self.ssl_alpn)
                     
-                return self.ssl_context.wrap_socket(s,server_hostname=self.ssl_sni)
+                return self.ssl_context.wrap_socket(s,server_hostname=self.ssl_sni,suppress_ragged_eofs=True)
             else:
                 self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
                 if self.sslv > 0:
@@ -844,7 +844,12 @@ class Repeater:
             
             while True:
                 try:
-                    data = conn.recv(conn.pending())
+                    pen = conn.pending()
+                    #print_red_bright("DEBUG: %dB pending in SSL buffer" % pen)
+                    if pen == 0:
+                        pen = 10240
+                        
+                    data = conn.recv(pen)
                 except ssl.SSLError as e:
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
                     if e.errno != ssl.SSL_ERROR_WANT_READ:
@@ -958,12 +963,150 @@ class Repeater:
     def is_eot(self):
         return self.total_packet_index >= len(self.packets)
 
+
+    def packet_read(self,conn):
+        d = self.read(conn)
+        
+        #print_red_bright("DEBUG: read returned %d" % len(d))
+        
+        if not len(d):
+            return len(d)
+
+        
+        # there are still some data to send/receive
+        if self.total_packet_index < len(self.packets):
+            # test if data are as we should expect
+            aligned = False
+            
+            # if auto is enabled, we will not wait for user input when we received already some packet
+            # user had to start pplay on the other side
+            if option_auto_send:
+                self.auto_send_now = time.time()
+            
+            # to print what we got and what we expect
+            #print_white_bright(hexdump(d))
+            #print_white_bright(hexdump(str(self.packets[self.total_packet_index])))
+
+            scripter_flag = ""
+            if self.scripter:
+                    scripter_flag = " (sending to script)"
+            
+            if str(d) == str(self.packets[self.total_packet_index]):
+                aligned = True
+                self.total_packet_index += 1
+                print_red_bright("# ... %s: received %dB OK%s" % (str_time(),len(d),scripter_flag))
+            
+            else:
+                smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index-1]),autojunk=False)
+                qr = smatch.ratio()
+                if qr > 0.05:
+                    print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(),len(d),qr*100,scripter_flag))                    
+                    self.total_packet_index += 1
+                else:
+                    print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
+            
+            if self.scripter:
+                self.scripter.after_received(self.whoami,self.packet_index,str(d))
+                #print_red_bright("# received data processed")
+            
+            # this block is printed while in the normal packet loop (there are packets still to receive or send
+            if aligned:
+                if option_dump_received_correct:
+                    print_red_bright("#-->")
+                    print_red(hexdump(d))
+                    print_red_bright("#<--")
+            else:
+                if option_dump_received_different:
+                    print_red_bright("#-->")
+                    print_red(hexdump(d))
+                    print_red_bright("#<--")
+
+        # this block means there is nothing to send/receive
+        else:
+            if option_dump_received_different:
+                print_red_bright("#-->")
+                print_red(hexdump(d))
+                print_red_bright("#<--")
+        
+        # we have already data to send prepared!
+        if self.to_send:
+            #  print, but not block
+            self.ask_to_send(self.to_send)
+        else:
+            self.ask_to_send_more()
+            
+        return len(d)
+        
+
+    def packet_write(self,conn,cmd_hook=False):
+            
+        if self.packet_index >= len(self.origins[self.whoami]):
+            print_yellow_bright("# [EOT]")
+            self.ask_to_send_more()
+            # if we have nothing to send, remove conn from write set
+            self.to_send = None
+            self.write_end = True
+            return
+        else:
+            
+            if not self.to_send:
+                self.to_send = self.load_to_send(self.whoami,self.packet_index)
+                
+        
+                to_send_2 = None
+                if self.scripter:
+                    to_send_2 = self.scripter.before_send(self.whoami,self.packet_index,str(self.to_send))
+                    if to_send_2 != None:
+                        print_yellow_bright("# data modified by script!")
+                        self.to_send = to_send_2
+                    
+                self.ask_to_send(self.to_send)
+            else:
+                if cmd_hook:
+                    l = sys.stdin.readline()
+                    #print("# --> entered: '" + l + "'")
+                    self.process_command(l.strip(),'ysclxrihN',conn)
+
+                    # in auto mode, reset current state, since we wrote into the socket
+                    if option_auto_send:
+                        self.auto_send_now = time.time()
+                        return
+
+
+                # auto_send feature
+                if option_auto_send > 0 and self.send_aligned():
+                    
+                    now = time.time()
+                    if self._last_countdown_print == 0:
+                        self._last_countdown_print = now
+                    
+
+                    delta = now - self._last_countdown_print
+                    # print out the dot
+                    if delta >= 1:
+                        
+                        # print dot only if there some few seconds to indicate
+                        if option_auto_send >= 5:
+                            print(".",end='',file=sys.stderr)
+                            
+                        self._last_countdown_print = now                            
+
+                    if now - self.auto_send_now >= option_auto_send:
+                        
+                        # indicate sending only when there are few seconds to indicate
+                        if option_auto_send >= 5:
+                            print_green_bright("  ... sending!")
+                            
+                        self.send_to_send(conn)
+                        self.auto_send_now = now
+
+
     def packet_loop(self,conn):
         global option_auto_send
 
         running = 1        
-        write_end = False
-        auto_send_now = time.time()
+        self.write_end = False
+        self.auto_send_now = time.time()
         eof_notified = False
         
         while running:
@@ -971,11 +1114,15 @@ class Repeater:
             #print_red(".")
             
             if self.is_eot():
+                
+                #print_red_bright("DEBUG: is_eot returns true")
+                
                 if not eof_notified:
                     print_red_bright("### END OF TRANSMISSION ###")
                     eof_notified = True
                     
                 if self.exitoneot:
+                    #print_red_bright("DEBUG: exitoneot true")
                     
                     if self.whoami == "server":
                         if option_auto_send >= 0:
@@ -984,6 +1131,7 @@ class Repeater:
                             time.sleep(0.5)
                     
                     if self.ssl_context:
+                        #print_red_bright("DEBUG: unwrapping SSL")
                         self.sock.unwrap()
                     
                     print_red("Exiting on EOT")
@@ -991,141 +1139,21 @@ class Repeater:
                     conn.close()
                     sys.exit(0)
             
-            r,w,e = self.select_wrapper(conn,write_end)
+            r,w,e = self.select_wrapper(conn,self.write_end)
+            
+            #print_red_bright("DEBUG: sockets: r %s, w %s, e %s" % (str(r), str(w), str(e)))
             
             if conn in r:
-                d = self.read(conn)
-                if not len(d):
+                l = self.packet_read(conn)
+                if l == 0:
                     print_red_bright("#--> connection closed by peer")
-                    break
-
-                
-                # there are still some data to send/receive
-                if self.total_packet_index < len(self.packets):
-                    # test if data are as we should expect
-                    aligned = False
-                    
-                    # if auto is enabled, we will not wait for user input when we received already some packet
-                    # user had to start pplay on the other side
-                    if option_auto_send:
-                        auto_send_now = time.time()
-                    
-                    # to print what we got and what we expect
-                    #print_white_bright(hexdump(d))
-                    #print_white_bright(hexdump(str(self.packets[self.total_packet_index])))
-
-                    scripter_flag = ""
-                    if self.scripter:
-                            scripter_flag = " (sending to script)"
-                    
-                    if str(d) == str(self.packets[self.total_packet_index]):
-                        aligned = True
-                        self.total_packet_index += 1
-                        print_red_bright("# ... %s: received %dB OK%s" % (str_time(),len(d),scripter_flag))
-                    
-                    else:
-                        smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index-1]),autojunk=False)
-                        qr = smatch.ratio()
-                        if qr > 0.05:
-                            print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(),len(d),qr*100,scripter_flag))                    
-                            self.total_packet_index += 1
-                        else:
-                            print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
-                    
-                    if self.scripter:
-                        self.scripter.after_received(self.whoami,self.packet_index,str(d))
-                        #print_red_bright("# received data processed")
-                    
-                    # this block is printed while in the normal packet loop (there are packets still to receive or send
-                    if aligned:
-                        if option_dump_received_correct:
-                            print_red_bright("#-->")
-                            print_red(hexdump(d))
-                            print_red_bright("#<--")
-                    else:
-                        if option_dump_received_different:
-                            print_red_bright("#-->")
-                            print_red(hexdump(d))
-                            print_red_bright("#<--")
-
-                # this block means there is nothing to send/receive
-                else:
-                    if option_dump_received_different:
-                        print_red_bright("#-->")
-                        print_red(hexdump(d))
-                        print_red_bright("#<--")
-                
-                # we have already data to send prepared!
-                if self.to_send:
-                    #  print, but not block
-                    self.ask_to_send(self.to_send)
-                else:
-                    self.ask_to_send_more()
+                    break    
         
             if conn in w:
-            
-                if self.packet_index >= len(self.origins[self.whoami]):
-                    print_yellow_bright("# [EOT]")
-                    self.ask_to_send_more()
-                    # if we have nothing to send, remove conn from write set
-                    self.to_send = None
-                    write_end = True
-                    continue
-                else:
-                    
-                    if not self.to_send:
-                        self.to_send = self.load_to_send(self.whoami,self.packet_index)
-                        
-                
-                        to_send_2 = None
-                        if self.scripter:
-                            to_send_2 = self.scripter.before_send(self.whoami,self.packet_index,str(self.to_send))
-                            if to_send_2 != None:
-                                print_yellow_bright("# data modified by script!")
-                                self.to_send = to_send_2
-                            
-                        self.ask_to_send(self.to_send)
-                    else:
-                        if sys.stdin in r:
-                            l = sys.stdin.readline()
-                            #print("# --> entered: '" + l + "'")
-                            self.process_command(l.strip(),'ysclxrihN',conn)
+                if not self.write_end:
+                    self.packet_write(conn,cmd_hook=(sys.stdin in r))
 
-                            # in auto mode, reset current state, since we wrote into the socket
-                            if option_auto_send:
-                                auto_send_now = time.time()
-                                continue
-
-
-                        # auto_send feature
-                        if option_auto_send > 0 and self.send_aligned():
-                            
-                            now = time.time()
-                            if self._last_countdown_print == 0:
-                                self._last_countdown_print = now
-                            
-
-                            delta = now - self._last_countdown_print
-                            # print out the dot
-                            if delta >= 1:
-                                
-                                # print dot only if there some few seconds to indicate
-                                if option_auto_send >= 5:
-                                    print(".",end='',file=sys.stderr)
-                                    
-                                self._last_countdown_print = now                            
-
-                            if now - auto_send_now >= option_auto_send:
-                                
-                                # indicate sending only when there are few seconds to indicate
-                                if option_auto_send >= 5:
-                                    print_green_bright("  ... sending!")
-                                    
-                                self.send_to_send(conn)
-                                auto_send_now = now
-
-
-            if write_end and sys.stdin in r:
+            if self.write_end and sys.stdin in r:
                 l = sys.stdin.readline()
                 self.process_command(l.strip(),'yclxN',conn)
 
