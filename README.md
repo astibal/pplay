@@ -1,5 +1,6 @@
 # Support #
-For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.
+For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.  
+If you can make use of .deb package, visit [download section](https://bitbucket.org/astibal/pplay/downloads/) of this site.
 
 # History #
 
