@@ -19,6 +19,7 @@ import atexit
 from scapy.all import *
 from select import select
 
+have_paramiko = False
 have_colorama = False
 have_ssl = False
 
@@ -26,7 +27,7 @@ option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
 
-pplay_version = "1.6.4"
+pplay_version = "1.7.0"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -38,6 +39,8 @@ copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
 g_script_module = None
 g_delete_files = []
 
+
+# try to import colorama, indicate with have_ variable
 try:
     import colorama
     from colorama import Fore, Back, Style
@@ -46,12 +49,23 @@ try:
 except ImportError, e:
     print('No colorama, enjoy.',file=sys.stderr)
     
-
+    
+# try to import ssl, indicate with have_ variable
 try:
     import ssl
     have_ssl = True
 except ImportError, e:
     print('No SSL support!',file=sys.stderr)
+
+
+# try to import paramiko, indicate with have_ variable
+
+try:
+    import paramiko
+    have_paramiko = True
+except ImportError, e:
+    print('No paramiko support, use ssh with pipes!',file=sys.stderr)
+
 
 
 def str_time():
@@ -61,12 +75,14 @@ def str_time():
 def print_green_bright(what):
     if have_colorama:
         print(Fore.GREEN + Style.BRIGHT + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_green(what):
     if have_colorama:
         print(Fore.GREEN + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
@@ -74,36 +90,42 @@ def print_green(what):
 def print_yellow_bright(what):
     if have_colorama:
         print(Fore.YELLOW + Style.BRIGHT + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_yellow(what):
     if have_colorama:
         print(Fore.YELLOW + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_red_bright(what):
     if have_colorama:
         print(Fore.RED + Style.BRIGHT + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_red(what):
     if have_colorama:
         print(Fore.RED + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_white_bright(what):
     if have_colorama:
         print(Fore.WHITE + Style.BRIGHT + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
 def print_white(what):
     if have_colorama:
         print(Fore.WHITE + what,file=sys.stderr)
+        print(Style.RESET_ALL)
     else:
         print(what,file=sys.stderr)
 
@@ -529,7 +551,8 @@ class Repeater:
                 
     def export_script(self,efile):
         
-        c  = "class PPlayScript:\n\n"
+        c = "__pplay_packed_source__ = True\n\n\n\n"
+        c += "class PPlayScript:\n\n"
         c += "    def __init__(self,pplay):\n"
         c += "        # access to pplay engine\n"
         c += "        self.pplay = pplay\n\n"
@@ -630,8 +653,10 @@ class Repeater:
 
         if self.send_aligned():
             print_green(out)
-        else:
-            print_yellow(out)
+        # 
+        #dont print hexdumps of unaligned data
+        #else:
+        #    print_yellow(out)
         
         
         if option_auto_send < 0 or option_auto_send >= 5:
@@ -755,8 +780,6 @@ class Repeater:
             
             if self.custom_ip:
                 
-                print("custom IP: " + self.custom_ip)
-                
                 t = self.custom_ip.split(":")
                 if len(t) > 1:
                     ip = t[0]
@@ -769,6 +792,8 @@ class Repeater:
                 # if specified port is 0, use original port in the capture
                 if port == 0:
                     port = int(self.server_port)
+                
+                #print("custom IP:PORT %s:%s" % (ip,port) )
                 
             self.whoami = "server"
             print_white_bright("IMPERSONATING SERVER, listening on %s:%s" % (ip,port,))
@@ -791,15 +816,26 @@ class Repeater:
                 s.listen(1)
 
             while True:
-                print ("waiting for new connection...")
+                print_white("waiting for new connection...")
                 
                 conn = None
                 client_address = ["",""]
                 
                 if not self.is_udp:
+                    while True:
+                        readable, writable, errored = select([s,], [], [], 0.25)
+                        if s in readable:
+                            break
+                        else:
+                            # timeout
+                            if self.detect_parent_death():
+                                self.on_parent_death()
+                        
+
+                    
                     conn, client_address = s.accept()
                     self.target = client_address
-                    print("accepted client from %s:%s" % (client_address[0],client_address[1]),file=sys.stderr)
+                    print_white_bright("accepted client from %s:%s" % (client_address[0],client_address[1]))
                 else:
                     conn = s
                     client_address == ["",""]
@@ -924,8 +960,17 @@ class Repeater:
 
             self.to_send = None
 
-           
+    
+    def detect_parent_death(self):
+        # mypid = os.getpid()
+        # parpid = os.getppid()
+        # print_red_bright("mypid %d, parent pid %d" % (mypid,parpid,))        
         
+        return os.getppid() == 1
+    
+    def on_parent_death(self):
+        sys.exit(-2)
+    
 
     def select_wrapper(self,conn,no_writes):
         
@@ -953,12 +998,20 @@ class Repeater:
                 r.append(conn)
             if sys.stdin in rr:
                 r.append(sys.stdin)
-                
+
+            if self.detect_parent_death():
+                self.on_parent_death()
+
             return r,w,e
             
         else:
 
-            return  select(inputs,outputs,[],0.2)
+            r,w,e = select(inputs,outputs,[],0.2)
+            if self.detect_parent_death():
+                self.on_parent_death()
+            
+            
+            return r,w,e
 
     def is_eot(self):
         return self.total_packet_index >= len(self.packets)
@@ -1004,6 +1057,10 @@ class Repeater:
                     self.total_packet_index += 1
                 else:
                     print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
+                    
+                warning_timer = max(option_auto_send*3,10)
+                print_red_bright(" ... continuing after %ds" % (warning_timer,))
+                time.sleep(warning_timer)
             
             if self.scripter:
                 self.scripter.after_received(self.whoami,self.packet_index,str(d))
@@ -1064,13 +1121,16 @@ class Repeater:
             else:
                 if cmd_hook:
                     l = sys.stdin.readline()
-                    #print("# --> entered: '" + l + "'")
-                    self.process_command(l.strip(),'ysclxrihN',conn)
+                    
+                    # readline can return empty string
+                    if len(l) > 0:
+                        print("# --> entered: '" + l + "'")
+                        self.process_command(l.strip(),'ysclxrihN',conn)
 
-                    # in auto mode, reset current state, since we wrote into the socket
-                    if option_auto_send:
-                        self.auto_send_now = time.time()
-                        return
+                        # in auto mode, reset current state, since we wrote into the socket
+                        if option_auto_send:
+                            self.auto_send_now = time.time()
+                            return
 
 
                 # auto_send feature
@@ -1087,7 +1147,10 @@ class Repeater:
                         
                         # print dot only if there some few seconds to indicate
                         if option_auto_send >= 5:
-                            print(".",end='',file=sys.stderr)
+                            #print(".",end='',file=sys.stderr)
+                            #print(".",end='',file=sys.stdout)
+                            print(".",end='\n',file=sys.stdout)
+                            sys.stdout.flush()
                             
                         self._last_countdown_print = now                            
 
@@ -1147,6 +1210,12 @@ class Repeater:
                 l = self.packet_read(conn)
                 if l == 0:
                     print_red_bright("#--> connection closed by peer")
+                    if self.exitoneot:
+                        print_red("Exiting on EOT")
+                        conn.shutdown(socket.SHUT_WR)
+                        conn.close()
+                        sys.exit(0)                        
+                        
                     break    
         
             if conn in w:
@@ -1155,7 +1224,8 @@ class Repeater:
 
             if self.write_end and sys.stdin in r:
                 l = sys.stdin.readline()
-                self.process_command(l.strip(),'yclxN',conn)
+                if len(l) > 0:
+                    self.process_command(l.strip(),'yclxN',conn)
 
                 if self.to_send:
                     self.ask_to_send()
@@ -1187,10 +1257,11 @@ class Repeater:
         print_yellow_bright("%% Enter new payload line by line (empty line commits). Lines will be sent out separated by CRLF.")
         l = sys.stdin.readline()
 
-        while l.strip():
+        while len(l) > 0:
             nd += l.strip() + "\r\n"
             nl += 1
             l = sys.stdin.readline()
+                
         
         if nl > 1:
             print_yellow_bright("%% %d lines (%d bytes)" % (nl,len(nd)))
@@ -1271,15 +1342,13 @@ class Repeater:
 
 
 def main():
-    global option_auto_send, g_script_module
+    global option_auto_send, g_script_module, have_colorama
     
-    if have_colorama:
-        colorama.init(autoreset=True)
 
 
     parser = argparse.ArgumentParser(
         description=title,
-        epilog=" - %s " % (copyright,) )
+        epilog=" - %s " % (copyright,))
 
     ds = parser.add_argument_group("Data Sources")
     group1 = ds.add_mutually_exclusive_group()
@@ -1292,6 +1361,11 @@ def main():
     group2 = ac.add_mutually_exclusive_group()
     group2.add_argument('--client', nargs=1, help='replay client-side of the CONNECTION, connect and send payload to specified IP address and port. Use IP:PORT or IP.')
     group2.add_argument('--server', nargs='?', help='listen on port and replay server payload, accept incoming connections. Use IP:PORT or PORT')
+    
+    rc = parser.add_argument_group("Remotes")
+    rcgroup = rc.add_mutually_exclusive_group()
+    rcgroup.add_argument('--remote-ssh', nargs=1, help='Connect to remote host with ssh, run itself (best used with `--pack`-ed script). \n    Arguments follow this IP:PORT or IP(with 22 as default SSH port)')
+    
     group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
     group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
     group2.add_argument('--pack', nargs=1, help='pack packet data into the script itself. Good for automation.')
@@ -1335,9 +1409,20 @@ def main():
     var.add_argument('--exitoneot', required=False, action='store_true', help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
     var.add_argument('--nostdin', required=False, action='store_true', help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
     var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
+    var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
 
+
+    rem_ssh = parser.add_argument_group("Remote - SSH")
+    rem_ssh.add_argument('--remote-ssh-user', nargs=1,  help='SSH user. You can use SSH agent, too (so avoiding this option).')
+    rem_ssh.add_argument('--remote-ssh-password', nargs=1,  help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
     args = parser.parse_args(sys.argv[1:])
+
+    if have_colorama:
+        if not args.nocolor:
+            colorama.init(autoreset=False,strip=False)
+        else:
+            have_colorama = False
 
     if args.version:
         print_white_bright(title)
@@ -1357,6 +1442,9 @@ def main():
         pass
     elif args.script:
         r = Repeater(None,"")
+    elif args.remote_ssh:
+        # the same as script, but we won't init repeater
+        pass
     else:
         print_red_bright("error: no file to parse!")
         sys.exit(-1)
@@ -1502,7 +1590,10 @@ def main():
         elif not args.script:
             print_white_bright("--connection argument has to be set for this option")
             sys.exit(-1)
-        
+            
+            
+            
+            
         # cannot collide with script - those are in the exclusive argparse group
         if args.export:
             
@@ -1533,6 +1624,163 @@ def main():
 
         # ok regardless data controlled by script or capture file read
         elif args.client or args.server:
+            
+            if args.remote_ssh:
+
+                port = "22"
+                host = "127.0.0.1"
+                host_port = args.remote_ssh[0].split(":")
+                
+                if len(host_port) > 0:
+                    host = host_port[0]
+                    if not host:
+                        host = "127.0.0.1"
+                
+                if len(args.remote_ssh) > 1:
+                    port = host_port[1]
+                
+                print_white("remote location: %s:%s" % (host,port,))
+
+                # this have_ is local only!
+                have_script = False
+                my_source = None
+                try:
+                    if __pplay_packed_source__:
+                        print_white_bright("remote-ssh[this host] - having embedded PPlayScript")
+                        have_script = True
+
+                        # it's not greatest way to get this script source, but as long as pplay is 
+                        # single-source python script, it will work. Otherwise, we will need to do quine
+                        my_source = open(__file__).read()
+                        
+                except NameError, e:
+                        print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
+                    
+                if not have_script:
+                    import tempfile
+                    print_white_bright("remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
+                        
+                    if args.cert:
+                        r.ssl_cert = args.cert[0]
+
+                    if args.key:
+                        r.ssl_key = args.key[0]            
+                    
+                    temp_file = tempfile.NamedTemporaryFile(prefix="pplay",suffix="packed")
+                    r.export_self(temp_file.name)
+                    print_white_bright("remote-ssh[this host] - done")
+                    my_source = open(temp_file.name).read()
+                    
+                    have_script = True
+                    
+                
+                if have_paramiko and my_source:
+
+
+                    try:
+                        paramiko.util.log_to_file('/dev/null')
+                        from paramiko.ssh_exception import SSHException, AuthenticationException
+                        
+                        client = paramiko.SSHClient()
+                        client.load_system_host_keys()
+                        #client.set_missing_host_key_policy(paramiko.WarningPolicy)
+                        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                        
+                        if args.remote_ssh_user and args.remote_ssh_password:
+                            client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0], password=args.remote_ssh_password[0], allow_agent=False, look_for_keys=False)
+                            chan = client.get_transport().open_session(timeout=10)
+                            
+                        elif args.remote_ssh_user:
+                            client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0])
+                            chan = client.get_transport().open_session(timeout=10)
+                            
+                            paramiko.agent.AgentRequestHandler(chan)
+                        else:
+                            client.connect(hostname=host, port=int(port))
+                            chan = client.get_transport().open_session(timeout=10)
+                            
+                            paramiko.agent.AgentRequestHandler(chan)
+                            
+                            
+                        
+                        cmd = "python -u - "
+                        if have_script:
+                            cmd += "--script +"
+
+                        # iterate args and filter unwanted remote arguments, because of this we are not allowing abbreviated options :(
+                        
+                        filter_next = False
+                        for arg in sys.argv[1:]:
+                            if filter_next:
+                                filter_next = False
+                                continue
+                            
+                            if arg.startswith("--remote") or arg.startswith("--smcap") or arg.startswith("--pcap"):
+                                filter_next = True
+                                continue
+                            
+                            cmd += " " + arg
+                            
+                        
+                        # don't monitor stdin (it's always readable over SSH)
+                        # exit on the end of replay transmission --remote-ssh is intended to one-shot tests anyway
+                        cmd += " --nostdin"
+                        cmd += " --exitoneot"
+                        
+                        print("sending cmd: " + cmd)
+                            
+
+                        
+                        #
+                        #chan.set_environment_variable(name="PPLAY_COLORAMA",value="1")
+                        chan.set_combine_stderr(True)
+                        chan.exec_command(cmd)
+                        stdin = chan.makefile("wb", 10240)
+                        stdout = chan.makefile("r", 10240)
+                        #stderr = chan.makefile_stderr("r", 1024)                      
+                        
+                        
+                        # write myself (worm-like!)
+                        stdin.write(my_source)
+                        stdin.flush()
+                        # we must shutdown, so remote python knows the script is complete
+                        chan.shutdown_write()
+
+                        
+                        print("flushed")
+                        
+                        while not chan.exit_status_ready():
+                            time.sleep(0.1)
+                            if chan.recv_ready():
+                                d = chan.recv(10240)
+                                if len(d) > 0:
+                                    sys.stdout.write(d)
+
+                            r,w,e = select([sys.stdin,],[],[],0.1)
+                            if sys.stdin in r:
+                                cmd = sys.stdin.readline()
+                                print_red("cmd: " + cmd + "<<")
+                                stdin.write(cmd)
+    
+                    
+                    except paramiko.AuthenticationException, e:
+                        print_red_bright("authentication failed")
+                    
+                    except paramiko.SSHException, e:
+                        print_red_bright("ssh protocol error")
+                        
+                    except KeyboardInterrupt, e:
+                        print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
+                        
+
+                    finally:
+                        client.close()
+                        
+                    sys.exit(0)
+                else:
+                    print_red_bright("paramiko unavailable or --pack failed")
+                
+            
             if args.ssl:
                 if not have_ssl:
                     print_red_bright("error: SSL not available!")
