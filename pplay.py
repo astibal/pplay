@@ -15,10 +15,9 @@ import binascii
 import datetime
 import pprint
 import atexit
-
-from scapy.all import *
 from select import select
 
+have_scapy = False
 have_paramiko = False
 have_colorama = False
 have_ssl = False
@@ -41,6 +40,18 @@ g_delete_files = []
 
 g_hostname = socket.gethostname()
 
+
+try: 
+    from scapy.all import rdpcap
+    from scapy.all import IP
+    from scapy.all import TCP
+    from scapy.all import UDP
+    from scapy.all import Padding
+    have_scapy = True
+except ImportError, e:
+    print('== No scapy, pcap files not supported.',file=sys.stderr)
+
+
 ## try to import colorama, indicate with have_ variable
 try:
     import colorama
@@ -48,7 +59,7 @@ try:
     
     have_colorama = True
 except ImportError, e:
-    print('No colorama, enjoy.',file=sys.stderr)
+    print('== No colorama, enjoy.',file=sys.stderr)
     
     
 # try to import ssl, indicate with have_ variable
@@ -56,7 +67,7 @@ try:
     import ssl
     have_ssl = True
 except ImportError, e:
-    print('No SSL support!',file=sys.stderr)
+    print('== No SSL support!',file=sys.stderr)
 
 
 # try to import paramiko, indicate with have_ variable
@@ -65,7 +76,7 @@ try:
     import paramiko
     have_paramiko = True
 except ImportError, e:
-    print('No paramiko support, use ssh with pipes!',file=sys.stderr)
+    print('== No paramiko support, use ssh with pipes!',file=sys.stderr)
 
 
 
@@ -186,6 +197,8 @@ class Repeater:
         # index of in all packets regardless of origin
         self.total_packet_index = 0
         
+        # packet read counter (don't use it directly - for read_packet smart reads)
+        self.read_packet_counter = 0
         
         self.use_ssl = False
         self.sslv = 0
@@ -334,10 +347,20 @@ class Repeater:
             try:
                 sip = i[IP].src
                 dip = i[IP].dst
-                sport = str(i[TCP].sport)
-                dport = str(i[TCP].dport)
+                sport = 0
+                dport = 0
+                proto = i[IP].proto
+                
+                #print_white("debug: read_pcap: ip.proto " +  str(i[IP].proto))
+                if i[IP].proto == 6:
+                    sport = str(i[TCP].sport)
+                    dport = str(i[TCP].dport)
+                elif i[IP].proto == 17:
+                    sport = str(i[UDP].sport)
+                    dport = str(i[UDP].dport)
+                    
             except IndexError,e:
-                # IndexError: Layer [TCP|IP] not found
+                # IndexError: Layer [TCP|UDP|IP] not found
                 continue
 
             #print ">>> %s:%s -> %s:%s" % (sip,sport,dip,dport)
@@ -355,7 +378,16 @@ class Repeater:
                 
         
             if origin:
-                p = i[TCP].payload
+                p = ""
+                
+                if proto == 6:
+                    p = i[TCP].payload
+                elif proto == 17:
+                    p = i[UDP].payload
+                else:
+                    print_red("read_cap: cannot find payload in packet")
+                    continue
+                    
                 if len(p) == 0:
                     #print "No payload"
                     continue
@@ -883,17 +915,18 @@ class Repeater:
 
 
 
-    def read(self,conn):
+    def read(self,conn,blocking=True):
         if have_ssl and self.use_ssl:
             data = ''
             
+            conn.setblocking(blocking)
             while True:
                 try:
                     pen = conn.pending()
                     #print_red_bright("DEBUG: %dB pending in SSL buffer" % pen)
                     if pen == 0:
                         pen = 10240
-                        
+                
                     data = conn.recv(pen)
                 except ssl.SSLError as e:
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
@@ -911,25 +944,48 @@ class Repeater:
                 break
             
             self.tstamp_last_read = time.time()
+            conn.setblocking(True)
             return data
         else:
             self.tstamp_last_read = time.time()
             if not self.is_udp:
+                conn.setblocking(True)
                 return conn.recv(24096)
             else:
                 data, client_address = conn.recvfrom(24096)
                 self.target = client_address
+                conn.setblocking(True)
                 return data
 
     def write(self,conn,data):
         
+        ll = len(data)
+        l = 0
+        
         if have_ssl and self.use_ssl:
             self.tstamp_last_write = time.time()
-            return conn.write(data)
+            while l < ll:
+                r = conn.write(data[l:])
+                l += r
+                
+                # print warning
+                if r != ll:
+                    print_red_bright("debug write: sent %d out of %d" % (l,ll))
+                
+            return l
+                
         else:
             self.tstamp_last_write = time.time()
             if not self.is_udp:
-                return conn.send(data)
+                while l < ll:
+                    r = conn.send(data[l:])
+                    l += r
+                    
+                    if r != ll:
+                        print_red_bright("debug write: sent %d out of %d" % (l,ll))
+
+                return l
+            
             else:
                 return conn.sendto(data,self.target)
 
@@ -1027,12 +1083,33 @@ class Repeater:
 
 
     def packet_read(self,conn):
+
         d = self.read(conn)
-        
+
         #print_red_bright("DEBUG: read returned %d" % len(d))
-        
         if not len(d):
             return len(d)
+        
+        expected_data = str(self.packets[self.total_packet_index])
+
+        # wait for some time
+        loopcount = 0
+        loopmax = 1000
+        len_expected_data = len(expected_data)
+        len_d = len(str(d))
+
+        while len_d < len_expected_data:
+            print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
+            loopcount+=1
+            time.sleep(0.01)
+            d += self.read(conn)
+            len_d = len(str(d))
+            
+            if loopcount >= loopmax:
+                break
+        else:
+            print_white("finished data: %d/%d" % (len_d,len_expected_data))
+        
 
         
         # there are still some data to send/receive
@@ -1061,7 +1138,7 @@ class Repeater:
             
             else:
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
-                smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index-1]),autojunk=False)
+                smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index]),autojunk=False)
                 qr = smatch.ratio()
                 if qr > 0.05:
                     print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(),len(d),qr*100,scripter_flag))                    
@@ -1363,7 +1440,9 @@ def main():
 
     ds = parser.add_argument_group("Data Sources")
     group1 = ds.add_mutually_exclusive_group()
-    group1.add_argument('--pcap', nargs=1, help='pcap where the traffic should be read (retransmissions not checked)')
+    if have_scapy:
+        group1.add_argument('--pcap', nargs=1, help='pcap where the traffic should be read (retransmissions not checked)')
+    
     group1.add_argument('--smcap', nargs=1, help='textual capture taken by smithproxy')
     group1.add_argument('--script', nargs=1, help='load python script previously generated by --export command, OR use + to indicate script is embedded into source. See --pack option.')
 
@@ -1375,23 +1454,29 @@ def main():
     
     rc = parser.add_argument_group("Remotes")
     rcgroup = rc.add_mutually_exclusive_group()
-    rcgroup.add_argument('--remote-ssh', nargs=1, help='Connect to remote host with ssh, run itself (best used with `--pack`-ed script). \n    Arguments follow this IP:PORT or IP(with 22 as default SSH port)')
+    if have_paramiko:
+        rcgroup.add_argument('--remote-ssh', nargs=1, help=""" Run itself on remote SSH server. 
+        Arguments follow this IP:PORT or IP(with 22 as default SSH port) 
+        Note: All local files related options are filtered out. 
+        Remote server requires only pure python installed, as all smart stuff is done on the originating host.
+        """)
     
     group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
     group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
     group2.add_argument('--pack', nargs=1, help='pack packet data into the script itself. Good for automation.')
     group2.add_argument('--smprint', nargs=1,  help='print properties of the connection. Args: sip,sport,dip,dport,proto')
 
-    ac_sniff = parser.add_argument_group("Filter on sniffer filtes (mandatory unless --script is used)")
+    ac_sniff = parser.add_argument_group("Sniffer file filters (mandatory unless --script is used)")
     ac_sniff.add_argument('--connection', nargs=1, help='replay/export specified connection; use format <src_ip>:<sport>. IMPORTANT: it\'s SOURCE based to match unique flow!')
 
 
     prot = parser.add_argument_group("Protocol options")
-    prot.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL (defaults to library ... default)')
+    if have_ssl:
+        prot.add_argument('--ssl', required=False, action='store_true', help='toggle this flag to wrap payload to SSL (defaults to library ... default)')
+
     prot.add_argument('--tcp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in TCP')
     prot.add_argument('--udp', required=False, action='store_true', help='toggle to override L3 protocol from file and send payload in UDP')
     
-    prot_ssl = parser.add_argument_group("SSL protocol options")
     prot.add_argument('--ssl3', required=False, action='store_true', help='ssl3 ... won\'t be supported by library most likely')
     prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
     prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
@@ -1400,15 +1485,17 @@ def main():
     #if ssl.HAS_TLSv1_3:
     #    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
     
-    prot_ssl = parser.add_argument_group("SSL cipher support")
-    prot_ssl.add_argument('--cert', required=False, nargs=1, help='certificate (PEM format) for --server mode')
-    prot_ssl.add_argument('--key', required=False, nargs=1, help='key of certificate (PEM format) for --server mode')
-    
-    prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
-    prot_ssl.add_argument('--sni', required=False, nargs=1, help='specify remote server name (SNI extension, client only)')
-    prot_ssl.add_argument('--alpn', required=False, nargs=1, help='specify comma-separated next-protocols for ALPN extension (client only)')
-    prot_ssl.add_argument('--ecdh_curve', required=False, nargs=1, help='specify ECDH curve name')
-    
+    prot_ssl = parser.add_argument_group("SSL protocol options")
+    if have_ssl:
+        prot_ssl = parser.add_argument_group("SSL cipher support")
+        prot_ssl.add_argument('--cert', required=False, nargs=1, help='certificate (PEM format) for --server mode')
+        prot_ssl.add_argument('--key', required=False, nargs=1, help='key of certificate (PEM format) for --server mode')
+        
+        prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
+        prot_ssl.add_argument('--sni', required=False, nargs=1, help='specify remote server name (SNI extension, client only)')
+        prot_ssl.add_argument('--alpn', required=False, nargs=1, help='specify comma-separated next-protocols for ALPN extension (client only)')
+        prot_ssl.add_argument('--ecdh_curve', required=False, nargs=1, help='specify ECDH curve name')
+        
     
     var = parser.add_argument_group("Various")
     
@@ -1423,9 +1510,10 @@ def main():
     var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
 
 
-    rem_ssh = parser.add_argument_group("Remote - SSH")
-    rem_ssh.add_argument('--remote-ssh-user', nargs=1,  help='SSH user. You can use SSH agent, too (so avoiding this option).')
-    rem_ssh.add_argument('--remote-ssh-password', nargs=1,  help='SSH password. You can use SSH agent, too (so avoiding this option).')
+    if have_paramiko:
+        rem_ssh = parser.add_argument_group("Remote - SSH")
+        rem_ssh.add_argument('--remote-ssh-user', nargs=1,  help='SSH user. You can use SSH agent, too (so avoiding this option).')
+        rem_ssh.add_argument('--remote-ssh-password', nargs=1,  help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1444,7 +1532,7 @@ def main():
 
 
     r = None
-    if args.pcap:
+    if have_scapy and args.pcap:
         r = Repeater(args.pcap[0],"")
     elif args.smcap:
         r = Repeater(args.smcap[0],"")
@@ -1453,11 +1541,19 @@ def main():
         pass
     elif args.script:
         r = Repeater(None,"")
-    elif args.remote_ssh:
+    elif have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
         pass
     else:
-        print_red_bright("error: no file to parse!")
+        print_yellow_bright(title)
+        print_yellow_bright(copyright)
+        print("")
+        print_red("Colors support    : %d" % have_colorama)
+        print_red("PCAP files support: %d" % have_scapy)
+        print_red("SSL support       : %d" % have_ssl)
+        print_red("remote SSH support: %d" % have_paramiko)
+        
+        print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
 
@@ -1511,7 +1607,7 @@ def main():
     if args.list:
         if args.smcap:
             r.list_smcap()
-        elif args.pcap:
+        elif have_scapy and args.pcap:
             r.list_pcap()
             
         sys.exit(0)
@@ -1575,7 +1671,7 @@ def main():
                 
             if args.smcap:
                 r.read_smcap(im_ip,im_port)
-            elif args.pcap:
+            elif have_scapy and args.pcap:
                 r.read_pcap(im_ip,im_port)
                 
             if args.tcp:
@@ -1636,167 +1732,169 @@ def main():
         # ok regardless data controlled by script or capture file read
         elif args.client or args.server:
             
-            if args.remote_ssh:
+            if have_paramiko:
+                if args.remote_ssh:
 
-                port = "22"
-                host = "127.0.0.1"
-                host_port = args.remote_ssh[0].split(":")
-                
-                if len(host_port) > 0:
-                    host = host_port[0]
-                    if not host:
-                        host = "127.0.0.1"
-                
-                if len(args.remote_ssh) > 0:
-                    port = host_port[1]
-                
-                print_white("remote location: %s:%s" % (host,port,))
-
-                # this have_ is local only!
-                have_script = False
-                my_source = None
-                try:
-                    if __pplay_packed_source__:
-                        print_white_bright("remote-ssh[this host] - having embedded PPlayScript")
-                        have_script = True
-
-                        # it's not greatest way to get this script source, but as long as pplay is 
-                        # single-source python script, it will work. Otherwise, we will need to do quine
-                        my_source = open(__file__).read()
-                        
-                except NameError, e:
-                        have_script = False
-                        #print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
+                    port = "22"
+                    host = "127.0.0.1"
+                    host_port = args.remote_ssh[0].split(":")
                     
-                if not have_script:
-                    import tempfile
-                    print_white_bright("remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
-                        
-                    if args.cert:
-                        r.ssl_cert = args.cert[0]
-
-                    if args.key:
-                        r.ssl_key = args.key[0]            
+                    if len(host_port) > 0:
+                        host = host_port[0]
+                        if not host:
+                            host = "127.0.0.1"
                     
-                    temp_file = tempfile.NamedTemporaryFile(prefix="pplay",suffix="packed")
-                    r.export_self(temp_file.name)
-                    print_white_bright("remote-ssh[this host] - done")
-                    my_source = open(temp_file.name).read()
+                    if len(args.remote_ssh) > 0:
+                        port = host_port[1]
                     
-                    have_script = True
-                    
-                
-                if have_paramiko and my_source:
+                    print_white("remote location: %s:%s" % (host,port,))
 
-
+                    # this have_ is local only!
+                    have_script = False
+                    my_source = None
                     try:
-                        paramiko.util.log_to_file('/dev/null')
-                        from paramiko.ssh_exception import SSHException, AuthenticationException
-                        
-                        client = paramiko.SSHClient()
-                        client.load_system_host_keys()
-                        #client.set_missing_host_key_policy(paramiko.WarningPolicy)
-                        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        
-                        if args.remote_ssh_user and args.remote_ssh_password:
-                            client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0], password=args.remote_ssh_password[0], allow_agent=False, look_for_keys=False)
-                            chan = client.get_transport().open_session(timeout=10)
-                            
-                        elif args.remote_ssh_user:
-                            client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0])
-                            chan = client.get_transport().open_session(timeout=10)
-                            
-                            paramiko.agent.AgentRequestHandler(chan)
-                        else:
-                            client.connect(hostname=host, port=int(port))
-                            chan = client.get_transport().open_session(timeout=10)
-                            
-                            paramiko.agent.AgentRequestHandler(chan)
-                            
-                            
-                        
-                        cmd = "python -u - "
-                        if have_script:
-                            cmd += "--script +"
+                        if __pplay_packed_source__:
+                            print_white_bright("remote-ssh[this host] - having embedded PPlayScript")
+                            have_script = True
 
-                        # iterate args and filter unwanted remote arguments, because of this we are not allowing abbreviated options :(
-                        
-                        filter_next = False
-                        for arg in sys.argv[1:]:
-                            if filter_next:
-                                filter_next = False
-                                continue
+                            # it's not greatest way to get this script source, but as long as pplay is 
+                            # single-source python script, it will work. Otherwise, we will need to do quine
+                            my_source = open(__file__).read()
                             
-                            if arg.startswith("--remote") or arg.startswith("--smcap") or arg.startswith("--pcap"):
-                                filter_next = True
-                                continue
-                            
-                            cmd += " " + arg
-                            
+                    except NameError, e:
+                            have_script = False
+                            #print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
                         
-                        # don't monitor stdin (it's always readable over SSH)
-                        # exit on the end of replay transmission --remote-ssh is intended to one-shot tests anyway
-                        cmd += " --nostdin"
-                        
-                        # FIXME: not sure about this. Don't assume what user really wants to do
-                        # cmd += " --exitoneot"
-                        
-                        #print_red("sending cmd: " + cmd)
+                    if not have_script:
+                        import tempfile
+                        print_white_bright("remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
                             
+                        if args.cert:
+                            r.ssl_cert = args.cert[0]
 
+                        if args.key:
+                            r.ssl_key = args.key[0]            
                         
-                        #
-                        #chan.set_environment_variable(name="PPLAY_COLORAMA",value="1")
-                        chan.set_combine_stderr(True)
-                        chan.exec_command(cmd)
-                        stdin = chan.makefile("wb", 10240)
-                        stdout = chan.makefile("r", 10240)
-                        #stderr = chan.makefile_stderr("r", 1024)                      
+                        temp_file = tempfile.NamedTemporaryFile(prefix="pplay",suffix="packed")
+                        r.export_self(temp_file.name)
+                        print_white_bright("remote-ssh[this host] - done")
+                        my_source = open(temp_file.name).read()
                         
+                        have_script = True
                         
-                        # write myself (worm-like!)
-                        stdin.write(my_source)
-                        stdin.flush()
-                        # we must shutdown, so remote python knows the script is complete
-                        chan.shutdown_write()
+                    
+                    if my_source:
 
-                        
-                        #print_red("remote-ssh[remote host] stdin flushed")
-                        
-                        while not chan.exit_status_ready():
-                            time.sleep(0.1)
-                            if chan.recv_ready():
-                                d = chan.recv(10240)
-                                if len(d) > 0:
-                                    sys.stdout.write(d)
-
-                            r,w,e = select([sys.stdin,],[],[],0.1)
-                            if sys.stdin in r:
-                                cmd = sys.stdin.readline()
+                        try:
+                            paramiko.util.log_to_file('/dev/null')
+                            from paramiko.ssh_exception import SSHException, AuthenticationException
+                            
+                            client = paramiko.SSHClient()
+                            client.load_system_host_keys()
+                            #client.set_missing_host_key_policy(paramiko.WarningPolicy)
+                            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                            
+                            if args.remote_ssh_user and args.remote_ssh_password:
+                                client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0], password=args.remote_ssh_password[0], allow_agent=False, look_for_keys=False)
+                                chan = client.get_transport().open_session(timeout=10)
                                 
-                                #print_red("cmd: " + cmd + "<<")
-                                # this currently doesn't work - stdin is closed by channel                                
-                                stdin.write(cmd)
-    
-                    
-                    except paramiko.AuthenticationException, e:
-                        print_red_bright("authentication failed")
-                    
-                    except paramiko.SSHException, e:
-                        print_red_bright("ssh protocol error")
-                        
-                    except KeyboardInterrupt, e:
-                        print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
-                        
+                            elif args.remote_ssh_user:
+                                client.connect(hostname=host, port=int(port), username=args.remote_ssh_user[0])
+                                chan = client.get_transport().open_session(timeout=10)
+                                
+                                paramiko.agent.AgentRequestHandler(chan)
+                            else:
+                                client.connect(hostname=host, port=int(port))
+                                chan = client.get_transport().open_session(timeout=10)
+                                
+                                paramiko.agent.AgentRequestHandler(chan)
+                                
+                                
+                            
+                            cmd = "python -u - "
+                            if have_script:
+                                cmd += "--script +"
 
-                    finally:
-                        client.close()
+                            # iterate args and filter unwanted remote arguments, because of this we are not allowing abbreviated options :(
+                            
+                            filter_next = False
+                            for arg in sys.argv[1:]:
+                                if filter_next:
+                                    filter_next = False
+                                    continue
+                                
+                                if arg.startswith("--remote") or arg.startswith("--smcap") or arg.startswith("--pcap") \
+                                    or arg.startswith("--key") or arg.startswith("--cert"):
+                                            
+                                    filter_next = True
+                                    continue
+                                
+                                cmd += " " + arg
+                                
+                            
+                            # don't monitor stdin (it's always readable over SSH)
+                            # exit on the end of replay transmission --remote-ssh is intended to one-shot tests anyway
+                            cmd += " --nostdin"
+                            
+                            # FIXME: not sure about this. Don't assume what user really wants to do
+                            # cmd += " --exitoneot"
+                           
+                            #print_red("sending cmd: " + cmd)
+                                
+
+                            
+                            #
+                            #chan.set_environment_variable(name="PPLAY_COLORAMA",value="1")
+                            chan.set_combine_stderr(True)
+                            chan.exec_command(cmd)
+                            stdin = chan.makefile("wb", 10240)
+                            stdout = chan.makefile("r", 10240)
+                            #stderr = chan.makefile_stderr("r", 1024)                      
+                            
+                            
+                            # write myself (worm-like!)
+                            stdin.write(my_source)
+                            stdin.flush()
+                            # we must shutdown, so remote python knows the script is complete
+                            chan.shutdown_write()
+
+                            
+                            #print_red("remote-ssh[remote host] stdin flushed")
+                            
+                            while not chan.exit_status_ready():
+                                time.sleep(0.1)
+                                if chan.recv_ready():
+                                    d = chan.recv(10240)
+                                    if len(d) > 0:
+                                        sys.stdout.write(d)
+
+                                r,w,e = select([sys.stdin,],[],[],0.1)
+                                if sys.stdin in r:
+                                    cmd = sys.stdin.readline()
+                                    
+                                    #print_red("cmd: " + cmd + "<<")
+                                    # this currently doesn't work - stdin is closed by channel                                
+                                    stdin.write(cmd)
+        
                         
-                    sys.exit(0)
-                else:
-                    print_red_bright("paramiko unavailable or --pack failed")
+                        except paramiko.AuthenticationException, e:
+                            print_red_bright("authentication failed")
+                        
+                        except paramiko.SSHException, e:
+                            print_red_bright("ssh protocol error")
+                            
+                        except KeyboardInterrupt, e:
+                            print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
+                            
+
+                        finally:
+                            client.close()
+                            
+                        sys.exit(0)
+                    else:
+                        print_red_bright("paramiko unavailable or --pack failed")
+                    
                 
-            
             if args.ssl:
                 if not have_ssl:
                     print_red_bright("error: SSL not available!")
