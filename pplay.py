@@ -39,8 +39,9 @@ copyright="written by Ales Stibal <astib@mag0.net> (c) 2014"
 g_script_module = None
 g_delete_files = []
 
+g_hostname = socket.gethostname()
 
-# try to import colorama, indicate with have_ variable
+## try to import colorama, indicate with have_ variable
 try:
     import colorama
     from colorama import Fore, Back, Style
@@ -69,63 +70,67 @@ except ImportError, e:
 
 
 def str_time():
-    t = datetime.now()
-    return str(t)
+    t = None
+    failed = False
+    try:
+        t = datetime.now()
+    except AttributeError, e:
+        failed = True
+    
+    if not t and failed:
+        try:
+            t = datetime.datetime.now()
+        except Exception, e:
+            t = "<?>"
+    
+    return socket.gethostname() + "@" + str(t)
 
 def print_green_bright(what):
     if have_colorama:
-        print(Fore.GREEN + Style.BRIGHT + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.GREEN + Style.BRIGHT + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_green(what):
     if have_colorama:
-        print(Fore.GREEN + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.GREEN + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 
 def print_yellow_bright(what):
     if have_colorama:
-        print(Fore.YELLOW + Style.BRIGHT + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.YELLOW + Style.BRIGHT + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_yellow(what):
     if have_colorama:
-        print(Fore.YELLOW + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.YELLOW + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_red_bright(what):
     if have_colorama:
-        print(Fore.RED + Style.BRIGHT + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.RED + Style.BRIGHT + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_red(what):
     if have_colorama:
-        print(Fore.RED + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.RED + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_white_bright(what):
     if have_colorama:
-        print(Fore.WHITE + Style.BRIGHT + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.WHITE + Style.BRIGHT + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
 def print_white(what):
     if have_colorama:
-        print(Fore.WHITE + what,file=sys.stderr)
-        print(Style.RESET_ALL)
+        print(Fore.WHITE + what + Style.RESET_ALL,file=sys.stderr)
     else:
         print(what,file=sys.stderr)
 
@@ -210,6 +215,10 @@ class Repeater:
         
         # our peer (ip,port)
         self.target = (0,0)
+
+
+        # countdown timer for sending
+        self.send_countdown = 0
 
     def load_scripter_defaults(self):
         global g_delete_files
@@ -544,7 +553,7 @@ class Repeater:
                     
         with open(efile,"w") as o:
             o.write(out)
-            print(efile)
+            #print_red("pack: using " + efile)
             
             
                 
@@ -1049,7 +1058,9 @@ class Repeater:
                 self.total_packet_index += 1
                 print_red_bright("# ... %s: received %dB OK%s" % (str_time(),len(d),scripter_flag))
             
+            
             else:
+                print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
                 smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index-1]),autojunk=False)
                 qr = smatch.ratio()
                 if qr > 0.05:
@@ -1057,10 +1068,6 @@ class Repeater:
                     self.total_packet_index += 1
                 else:
                     print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
-                    
-                warning_timer = max(option_auto_send*3,10)
-                print_red_bright(" ... continuing after %ds" % (warning_timer,))
-                time.sleep(warning_timer)
             
             if self.scripter:
                 self.scripter.after_received(self.whoami,self.packet_index,str(d))
@@ -1124,7 +1131,7 @@ class Repeater:
                     
                     # readline can return empty string
                     if len(l) > 0:
-                        print("# --> entered: '" + l + "'")
+                        #print_white("# --> entered: '" + l + "'")
                         self.process_command(l.strip(),'ysclxrihN',conn)
 
                         # in auto mode, reset current state, since we wrote into the socket
@@ -1133,31 +1140,35 @@ class Repeater:
                             return
 
 
+                #print_white_bright("debug: autosend = " + str(option_auto_send))
+
                 # auto_send feature
                 if option_auto_send > 0 and self.send_aligned():
                     
                     now = time.time()
                     if self._last_countdown_print == 0:
                         self._last_countdown_print = now
-                    
 
                     delta = now - self._last_countdown_print
                     # print out the dot
                     if delta >= 1:
                         
+                        self.send_countdown = round(self.auto_send_now + option_auto_send - now)
+                        
                         # print dot only if there some few seconds to indicate
-                        if option_auto_send >= 5:
+                        if option_auto_send >= 2:
                             #print(".",end='',file=sys.stderr)
                             #print(".",end='',file=sys.stdout)
-                            print(".",end='\n',file=sys.stdout)
-                            sys.stdout.flush()
+                            if self.send_countdown > 0:
+                                print("..%d" % (self.send_countdown,),end='\n',file=sys.stdout)
+                                sys.stdout.flush()
                             
                         self._last_countdown_print = now                            
 
                     if now - self.auto_send_now >= option_auto_send:
                         
                         # indicate sending only when there are few seconds to indicate
-                        if option_auto_send >= 5:
+                        if option_auto_send >= 2:
                             print_green_bright("  ... sending!")
                             
                         self.send_to_send(conn)
@@ -1636,7 +1647,7 @@ def main():
                     if not host:
                         host = "127.0.0.1"
                 
-                if len(args.remote_ssh) > 1:
+                if len(args.remote_ssh) > 0:
                     port = host_port[1]
                 
                 print_white("remote location: %s:%s" % (host,port,))
@@ -1654,7 +1665,8 @@ def main():
                         my_source = open(__file__).read()
                         
                 except NameError, e:
-                        print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
+                        have_script = False
+                        #print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
                     
                 if not have_script:
                     import tempfile
@@ -1725,9 +1737,11 @@ def main():
                         # don't monitor stdin (it's always readable over SSH)
                         # exit on the end of replay transmission --remote-ssh is intended to one-shot tests anyway
                         cmd += " --nostdin"
-                        cmd += " --exitoneot"
                         
-                        print("sending cmd: " + cmd)
+                        # FIXME: not sure about this. Don't assume what user really wants to do
+                        # cmd += " --exitoneot"
+                        
+                        #print_red("sending cmd: " + cmd)
                             
 
                         
@@ -1747,7 +1761,7 @@ def main():
                         chan.shutdown_write()
 
                         
-                        print("flushed")
+                        #print_red("remote-ssh[remote host] stdin flushed")
                         
                         while not chan.exit_status_ready():
                             time.sleep(0.1)
@@ -1759,7 +1773,9 @@ def main():
                             r,w,e = select([sys.stdin,],[],[],0.1)
                             if sys.stdin in r:
                                 cmd = sys.stdin.readline()
-                                print_red("cmd: " + cmd + "<<")
+                                
+                                #print_red("cmd: " + cmd + "<<")
+                                # this currently doesn't work - stdin is closed by channel                                
                                 stdin.write(cmd)
     
                     
