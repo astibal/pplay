@@ -56,7 +56,8 @@ if(UNIX)
     SET(CPACK_PACKAGE_DESCRIPTION "pplay is packet payload replayer")
     SET(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Pplay can resend .pcap and .smcap files over the network. It replays only TCP/UDP content (payload).")
     SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "Ales Stibal <astib@mag0.net>")
-    SET(CPACK_DEBIAN_PACKAGE_DEPENDS "python (>=2.7), python-scapy, python-colorama, tcpdump")
+    SET(CPACK_DEBIAN_PACKAGE_DEPENDS "python (>=2.7)")
+    SET(CPACK_DEBIAN_PACKAGE_RECOMMENDS "python-scapy, python-colorama, python-paramiko, tcpdump")
     INCLUDE(CPack)    
     
     
