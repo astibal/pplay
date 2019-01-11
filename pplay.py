@@ -48,7 +48,7 @@ try:
     from scapy.all import UDP
     from scapy.all import Padding
     have_scapy = True
-except ImportError, e:
+except ImportError as e:
     print('== No scapy, pcap files not supported.',file=sys.stderr)
 
 
@@ -58,7 +58,7 @@ try:
     from colorama import Fore, Back, Style
     
     have_colorama = True
-except ImportError, e:
+except ImportError as e:
     print('== No colorama, enjoy.',file=sys.stderr)
     
     
@@ -66,7 +66,7 @@ except ImportError, e:
 try:
     import ssl
     have_ssl = True
-except ImportError, e:
+except ImportError as e:
     print('== No SSL support!',file=sys.stderr)
 
 
@@ -75,7 +75,7 @@ except ImportError, e:
 try:
     import paramiko
     have_paramiko = True
-except ImportError, e:
+except ImportError as e:
     print('== No paramiko support, use ssh with pipes!',file=sys.stderr)
 
 
@@ -85,13 +85,13 @@ def str_time():
     failed = False
     try:
         t = datetime.now()
-    except AttributeError, e:
+    except AttributeError as e:
         failed = True
     
     if not t and failed:
         try:
             t = datetime.datetime.now()
-        except Exception, e:
+        except Exception as e:
             t = "<?>"
     
     return socket.gethostname() + "@" + str(t)
@@ -248,7 +248,7 @@ class Repeater:
             try:
                 if self.scripter.ssl_cert and self.scripter.ssl_key:
                     has_cert = True
-            except Exception, e:
+            except Exception as e:
                 print ("Script ssl certs: %s" % str(e))
             
             if has_cert:
@@ -288,7 +288,7 @@ class Repeater:
             try:
                 sip = i[IP].src
                 dip = i[IP].dst
-            except IndexError, e:
+            except IndexError as e:
                 # not even IP packet
                 continue
             
@@ -301,7 +301,7 @@ class Repeater:
             try:
                 sport = str(i[TCP].sport)
                 dport = str(i[TCP].dport)
-            except IndexError, e:
+            except IndexError as e:
                 proto = "UDP"
                
             # UDP
@@ -309,7 +309,7 @@ class Repeater:
                 try:
                     sport = str(i[UDP].sport)
                     dport = str(i[UDP].dport)
-                except IndexError, e:
+                except IndexError as e:
                     proto = "Unknown"
                   
                   
@@ -359,7 +359,7 @@ class Repeater:
                     sport = str(i[UDP].sport)
                     dport = str(i[UDP].dport)
                     
-            except IndexError,e:
+            except IndexError as e:
                 # IndexError: Layer [TCP|UDP|IP] not found
                 continue
 
@@ -803,12 +803,12 @@ class Repeater:
                 s.connect((ip,int(port)))
                 self.packet_loop(self.sock)
                 
-            except socket.error,e:
+            except socket.error as e:
                 print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
                 return
             
             
-        except KeyboardInterrupt, e:
+        except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
             return
     
@@ -894,10 +894,10 @@ class Repeater:
                         self.load_scripter_defaults()          
                     
                     self.packet_loop(conn)
-                except KeyboardInterrupt, e:
+                except KeyboardInterrupt as e:
                     print_white_bright("\nCtrl-C: hit in client loop, exiting to accept loop. Hit Ctrl-C again to terminate.")
                     conn.close()
-                except socket.error, e:
+                except socket.error as e:
                     print_white_bright("\nConnection with %s:%s terminated: %s" % (client_address[0],client_address[1],e,))
                     if self.is_udp:
                         break
@@ -906,10 +906,10 @@ class Repeater:
                 self.packet_index = 0
                 self.total_packet_index = 0
 
-        except KeyboardInterrupt, e:
+        except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
             return
-        except socket.error, e:
+        except socket.error as e:
             print_white_bright("Server error: %s" % (e,))
             sys.exit(16)
 
@@ -934,7 +934,7 @@ class Repeater:
                         raise
                     continue
 
-                except SystemError, e:
+                except SystemError as e:
                     print_red_bright("read(): system error: %s" % (str(e),))
 
                 data_left = conn.pending()
@@ -1648,11 +1648,11 @@ def main():
                 r.scripter = PPlayScript(r)
                 r.load_scripter_defaults()
         
-        except ImportError, e:
+        except ImportError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
             #print_red(pprint.pformat(sys.))
             sys.exit(-2)
-        except AttributeError, e:
+        except AttributeError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
             sys.exit(-2)
 
@@ -1761,7 +1761,7 @@ def main():
                             # single-source python script, it will work. Otherwise, we will need to do quine
                             my_source = open(__file__).read()
                             
-                    except NameError, e:
+                    except NameError as e:
                             have_script = False
                             #print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
                         
@@ -1877,13 +1877,13 @@ def main():
                                     stdin.write(cmd)
         
                         
-                        except paramiko.AuthenticationException, e:
+                        except paramiko.AuthenticationException as e:
                             print_red_bright("authentication failed")
                         
-                        except paramiko.SSHException, e:
+                        except paramiko.SSHException as e:
                             print_red_bright("ssh protocol error")
                             
-                        except KeyboardInterrupt, e:
+                        except KeyboardInterrupt as e:
                             print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
                             
 
@@ -1963,7 +1963,7 @@ def cleanup():
         try:
             print_white("unlink embedded tempfile - %s" % (f,))
             os.unlink(f)
-        except OSError, e:
+        except OSError as e:
             pass
     
 import atexit
