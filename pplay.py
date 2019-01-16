@@ -21,6 +21,7 @@ have_scapy = False
 have_paramiko = False
 have_colorama = False
 have_ssl = False
+have_requests = False
 
 option_dump_received_correct = False;
 option_dump_received_different = True;
@@ -59,7 +60,7 @@ try:
     
     have_colorama = True
 except ImportError as e:
-    print('== No colorama, enjoy.',file=sys.stderr)
+    print('== No colorama library, enjoy.',file=sys.stderr)
     
     
 # try to import ssl, indicate with have_ variable
@@ -67,16 +68,23 @@ try:
     import ssl
     have_ssl = True
 except ImportError as e:
-    print('== No SSL support!',file=sys.stderr)
+    print('== No SSL python support!',file=sys.stderr)
 
 
 # try to import paramiko, indicate with have_ variable
-
 try:
     import paramiko
     have_paramiko = True
 except ImportError as e:
-    print('== No paramiko support, use ssh with pipes!',file=sys.stderr)
+    print('== No paramiko library, use ssh with pipes!',file=sys.stderr)
+
+
+# try to import paramiko, indicate with have_ variable
+try:
+    import requests
+    have_requests = True
+except ImportError as e:
+    print('== No requests library support, files on http(s) won\'t be accessible!',file=sys.stderr)
 
 
 
@@ -170,12 +178,36 @@ def colorize(s,keywords):
 
 #print_green_bright("TEST%d:%s" % (12,54))
 
+
+# download file from HTTP and store it in /tmp/, add it to g_delete_files
+# so they are deleted at end of the program
+def http_download_temp(url):
+    import tempfile
+
+    r = requests.get(url, stream=True)
+    if not r:
+        print_red_bright("cannot download: " + url)
+        sys.exit(1)
+    
+    local_filename = tempfile.mkstemp(prefix="pplay_dwn_")[1]
+    g_delete_files.append(local_filename)
+
+    with open(local_filename, 'wb') as f:
+        for chunk in r.iter_content(chunk_size=1024): 
+            if chunk: # filter out keep-alive new chunks
+                f.write(chunk)
+                
+        r.close()
+        print_green("downloaded file into " + local_filename)
+    
+    return local_filename    
+
 class Repeater:
 
     def __init__(self,fnm,server_ip):
         
         self.fnm = fnm
-        
+       
         self.packets = []
         self.origins = {}
         
@@ -333,8 +365,6 @@ class Repeater:
         for unique_ident in ident.keys():
             print_yellow(unique_ident)
                 
-                
-
 
     def read_pcap(self,im_ip, im_port):
 
@@ -1438,7 +1468,12 @@ def main():
         description=title,
         epilog=" - %s " % (copyright,))
 
-    ds = parser.add_argument_group("Data Sources")
+    schemes_supported = "file,"
+    if have_requests:
+        schemes_supported += "http(s),"
+    schemes_supported = schemes_supported[:-1]
+
+    ds = parser.add_argument_group("Data Sources [%s]" % (schemes_supported,))
     group1 = ds.add_mutually_exclusive_group()
     if have_scapy:
         group1.add_argument('--pcap', nargs=1, help='pcap where the traffic should be read (retransmissions not checked)')
@@ -1451,6 +1486,10 @@ def main():
     group2 = ac.add_mutually_exclusive_group()
     group2.add_argument('--client', nargs=1, help='replay client-side of the CONNECTION, connect and send payload to specified IP address and port. Use IP:PORT or IP.')
     group2.add_argument('--server', nargs='?', help='listen on port and replay server payload, accept incoming connections. Use IP:PORT or PORT')
+    group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
+    group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
+    group2.add_argument('--pack', nargs=1, help='pack packet data into the script itself. Good for automation.')
+    group2.add_argument('--smprint', nargs=1,  help='print properties of the connection. Args: sip,sport,dip,dport,proto')
     
     rc = parser.add_argument_group("Remotes")
     rcgroup = rc.add_mutually_exclusive_group()
@@ -1461,10 +1500,6 @@ def main():
         Remote server requires only pure python installed, as all smart stuff is done on the originating host.
         """)
     
-    group2.add_argument('--list', action='store_true', help='rather than act, show to us list of connections in the specified sniff file')
-    group2.add_argument('--export', nargs=1, help='take capture file and export it to python script according CONNECTION parameter')
-    group2.add_argument('--pack', nargs=1, help='pack packet data into the script itself. Good for automation.')
-    group2.add_argument('--smprint', nargs=1,  help='print properties of the connection. Args: sip,sport,dip,dport,proto')
 
     ac_sniff = parser.add_argument_group("Sniffer file filters (mandatory unless --script is used)")
     ac_sniff.add_argument('--connection', nargs=1, help='replay/export specified connection; use format <src_ip>:<sport>. IMPORTANT: it\'s SOURCE based to match unique flow!')
@@ -1532,10 +1567,22 @@ def main():
 
 
     r = None
-    if have_scapy and args.pcap:
-        r = Repeater(args.pcap[0],"")
-    elif args.smcap:
-        r = Repeater(args.smcap[0],"")
+    if (have_scapy and args.pcap ) or args.smcap:
+        
+        fnm = ""
+        
+        if args.pcap:
+            fnm = args.pcap[0]
+        elif args.smcap:
+            fnm = args.smcap[0]
+        
+        if fnm.startswith("file://"):
+            fnm = fnm[len("file://"):]
+        elif fnm.startswith("http://") or fnm.startswith("https://"):
+            fnm = http_download_temp(args.pcap[0])
+        
+        if fnm:
+            r = Repeater(fnm,"")
         
     elif args.list:
         pass
@@ -1548,10 +1595,11 @@ def main():
         print_yellow_bright(title)
         print_yellow_bright(copyright)
         print("")
-        print_red("Colors support    : %d" % have_colorama)
-        print_red("PCAP files support: %d" % have_scapy)
-        print_red("SSL support       : %d" % have_ssl)
-        print_red("remote SSH support: %d" % have_paramiko)
+        print_red("Colors support       : %d" % have_colorama)
+        print_red("PCAP files support   : %d" % have_scapy)
+        print_red("SSL support          : %d" % have_ssl)
+        print_red("remote SSH support   : %d" % have_paramiko)
+        print_red("remote files support : %d" % have_requests)
         
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
@@ -1961,7 +2009,7 @@ def cleanup():
     global g_delete_files
     for f in g_delete_files:
         try:
-            print_white("unlink embedded tempfile - %s" % (f,))
+            #print_white("unlink tempfile - %s" % (f,))
             os.unlink(f)
         except OSError as e:
             pass
