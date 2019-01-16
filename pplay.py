@@ -1570,18 +1570,31 @@ def main():
     if (have_scapy and args.pcap ) or args.smcap:
         
         fnm = ""
+        is_local = False
         
         if args.pcap:
             fnm = args.pcap[0]
         elif args.smcap:
             fnm = args.smcap[0]
+        else:
+            print_red_bright("it should not end up this way :/")
+            sys.exit(255)
+            
         
         if fnm.startswith("file://"):
             fnm = fnm[len("file://"):]
+            is_local = True
+            
         elif fnm.startswith("http://") or fnm.startswith("https://"):
             fnm = http_download_temp(args.pcap[0])
+        else:
+            is_local = True
         
         if fnm:
+            if not os.path.isfile(fnm):
+                print_red_bright("local file doesn't exist: " + fnm)
+                sys.exit(3)
+                
             r = Repeater(fnm,"")
         
     elif args.list:
