@@ -1586,7 +1586,7 @@ def main():
             is_local = True
             
         elif fnm.startswith("http://") or fnm.startswith("https://"):
-            fnm = http_download_temp(args.pcap[0])
+            fnm = http_download_temp(fnm)
         else:
             is_local = True
         
