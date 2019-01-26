@@ -155,45 +155,32 @@ Yellow or green, pplay will act on behalf of you by default in 5 seconds => gree
 Hint: you can set --noauto, or --auto <big_seconds> program argument to change autosend feature. This feature could be also toggled on/off during the operation with "i" command shortcut.
 
 
-## Launch on remote SSH server *new in version 1.7.0*
+## Launch on remote SSH server 
+
+**new in version 1.7.0**
 You have learned so far how to "pack" data inside *pplay*. It's pretty useful, but you need to always *--pack*, create a file, send it to the other side, and execute there.
 Even though in previous examples we mentioned how to send *pack*ed over ssh stdin, you still need linux command-line ssh.
 Since version 1.7.0 you can actually utilize --remote-ssh parameter, and pplay will send over ssh itself!
 
 ```
-# this will run pplay on remote server, listening there on port 8000, packing all data needed to impersonate server from pcap file
+# this will run pplay on remote server, listening there on port 8000, packing all data needed to impersonate 
+# server from pcap file
 
-pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --server 8000 --remote-ssh 12.13.14.15:2222 --exitoneot --auto 0.1
+pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --server 8000 --remote-ssh 12.13.14.15:2222 \
+    --exitoneot --auto 0.1
 ```
 
 ```
 # this will run pplay on remote server, impersonating client, packing all data needed from pcap file
 
-pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --client 12.13.14.15:8000 --remote-ssh 12.13.14.88:2222 --exitoneot --auto 0.1
+pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --client 12.13.14.15:8000 \ 
+    --remote-ssh 12.13.14.88:2222 --exitoneot --auto 0.1
 ```
 
 Nice on this is you don't need anything on remote servers, just pure python. Nothing else is needed.
+
 **Limitation:** since python on remote server receives pplay from stdin which must be closed to actually launch it, commands from standard input are not supported and --nostdin is automatically added to remote command line. Recommended running with `--exitoneot` and `--auto`.
 
-### Related commands
-
-```
-  --remote-ssh REMOTE_SSH
-                        Run itself on remote SSH server. Arguments follow this
-                        IP:PORT or IP(with 22 as default SSH port) Note: All
-                        local files related options are filtered out. Remote
-                        server requires only pure python installed, as all
-                        smart stuff is done on the originating host.
-
-                        
-  --remote-ssh-user REMOTE_SSH_USER
-                        SSH user. You can use SSH agent, too (so avoiding this
-                        option).
-  --remote-ssh-password REMOTE_SSH_PASSWORD
-                        SSH password. You can use SSH agent, too (so avoiding
-                        this option).
-                        
-```
 
 ## Commands ##
 Below hex data (green or yellow), there is some contextual help for you: pplay is waiting for your override action to it's default -- autosend. At the time being, you can enter:
