@@ -892,6 +892,7 @@ class Repeater:
                 conn = None
                 client_address = ["",""]
                 
+                
                 if not self.is_udp:
                     while True:
                         readable, writable, errored = select([s,], [], [], 0.25)
@@ -911,6 +912,7 @@ class Repeater:
                     conn = s
                     client_address == ["",""]
                     
+                print_white("debug: mark 1")
             
                 #flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -935,6 +937,8 @@ class Repeater:
                 # reset it in both cases when Ctrl-C received, or connection was closed
                 self.packet_index = 0
                 self.total_packet_index = 0
+
+            print_white("debug: end of loop.")
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
