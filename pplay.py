@@ -1336,9 +1336,10 @@ class Repeater:
                         else:
                             time.sleep(0.5)
                     
-                    if self.ssl_context:
-                        #print_red_bright("DEBUG: unwrapping SSL")
-                        self.sock.unwrap()
+                        # FIXME: this blocks on client
+                        if self.ssl_context:
+                            # print_red_bright("DEBUG: unwrapping SSL")
+                            self.sock.unwrap()
                     
                     print_red("Exiting on EOT")
                     conn.shutdown(socket.SHUT_WR)
