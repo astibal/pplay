@@ -182,6 +182,10 @@ Nice on this is you don't need anything on remote servers, just pure python. Not
 **Limitation:** since python on remote server receives pplay from stdin which must be closed to actually launch it, commands from standard input are not supported and --nostdin is automatically added to remote command line. Recommended running with `--exitoneot` and `--auto`.
 
 
+## Connect client using SOCKS
+Another useful feature might be to use proxy for client outgoing connection (perhaps you are testing such a proxy, like I am).  
+To do so, use --socks parameter, taking IP address optionally suffixed with a port, ie. 10.0.0.1:1080
+
 ## Commands ##
 Below hex data (green or yellow), there is some contextual help for you: pplay is waiting for your override action to it's default -- autosend. At the time being, you can enter:
 
