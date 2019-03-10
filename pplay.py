@@ -22,10 +22,13 @@ have_paramiko = False
 have_colorama = False
 have_ssl = False
 have_requests = False
+have_socks = False
 
 option_dump_received_correct = False;
 option_dump_received_different = True;
 option_auto_send = 5
+
+option_socks = None
 
 pplay_version = "1.7.0"
 
@@ -86,6 +89,13 @@ try:
 except ImportError as e:
     print('== No requests library support, files on http(s) won\'t be accessible!',file=sys.stderr)
 
+
+# try to import paramiko, indicate with have_ variable
+try:
+    import socks
+    have_socks = True
+except ImportError as e:
+    print('== No pysocks library support, can\'t use SOCKS proxy!',file=sys.stderr)
 
 
 def str_time():
@@ -801,6 +811,8 @@ class Repeater:
                 
         
     def impersonate_client(self):
+        global option_socks
+        
         try:
             self.whoami = "client"
             
@@ -809,7 +821,16 @@ class Repeater:
             if  self.is_udp:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             else:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                if option_socks:
+                    # print_red_bright("SOCKS socket init") # DEBUG
+                    
+                    s = socks.socksocket()
+                    if len(option_socks) > 1:
+                        s.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
+                    else:
+                        s.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
+                else:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 
             s = self.prepare_socket(s,False)
             
@@ -1464,7 +1485,7 @@ class Repeater:
 
 
 def main():
-    global option_auto_send, g_script_module, have_colorama
+    global option_auto_send, g_script_module, have_colorama, option_socks
     
 
 
@@ -1503,6 +1524,8 @@ def main():
         Note: All local files related options are filtered out. 
         Remote server requires only pure python installed, as all smart stuff is done on the originating host.
         """)
+        if have_socks:
+            rcgroup.add_argument('--socks', nargs=1, help="""Client will connect via SOCKS proxy. Use IP:PORT, or IP (1080 is default port)""")
     
 
     ac_sniff = parser.add_argument_group("Sniffer file filters (mandatory unless --script is used)")
@@ -1553,6 +1576,7 @@ def main():
         rem_ssh = parser.add_argument_group("Remote - SSH")
         rem_ssh.add_argument('--remote-ssh-user', nargs=1,  help='SSH user. You can use SSH agent, too (so avoiding this option).')
         rem_ssh.add_argument('--remote-ssh-password', nargs=1,  help='SSH password. You can use SSH agent, too (so avoiding this option).')
+
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -1958,6 +1982,10 @@ def main():
                         sys.exit(0)
                     else:
                         print_red_bright("paramiko unavailable or --pack failed")
+
+            if have_socks and args.socks:
+                # print_red("Will use SOCKS") # DEBUG
+                option_socks = args.socks[0].split(":")
                     
                 
             if args.ssl:
