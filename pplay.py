@@ -30,7 +30,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.0"
+pplay_version = "1.7.1"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
