@@ -1628,7 +1628,7 @@ def main():
         
     elif args.list:
         pass
-    elif args.script:
+    elif args.script or args.export:
         r = Repeater(None,"")
     elif have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
@@ -1784,7 +1784,7 @@ def main():
                
         
         # we have to have data available, unless controlled by script
-        elif not args.script:
+        elif not ( args.script or args.export ):
             print_white_bright("--connection argument has to be set for this option")
             sys.exit(-1)
             
