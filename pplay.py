@@ -1158,19 +1158,16 @@ class Repeater:
 
         # wait for some time
         loopcount = 0
-        loopmax = 1000
         len_expected_data = len(expected_data)
         len_d = len(str(d))
 
         while len_d < len_expected_data:
-            print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
+            # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
             loopcount+=1
-            time.sleep(0.01)
+            
             d += self.read(conn)
             len_d = len(str(d))
             
-            if loopcount >= loopmax:
-                break
         else:
             print_white("finished data: %d/%d" % (len_d,len_expected_data))
         
