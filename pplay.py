@@ -30,7 +30,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.1"
+pplay_version = "1.7.2"
 
 #EMBEDDED DATA BEGIN
 #EMBEDDED DATA END
@@ -227,6 +227,9 @@ class Repeater:
         # list of indexes in packets
         self.origins['client'] = []
         self.origins['server'] = []
+        
+        self.sock = None
+        self.sock_upgraded = None
         
         self.server_port = 0
         self.custom_ip = server_ip
@@ -768,6 +771,16 @@ class Repeater:
             print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF | N=new data]")
         #print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
 
+    def starttls(self):
+        if have_ssl:
+            self.use_ssl = True
+            self.sock = self.prepare_socket(self.sock, self.whoami == 'server')
+            self.sock_upgraded = self.sock
+            
+            return True
+        else:
+            return False
+
 
     def prepare_socket(self, s, server_side=False):
         if have_ssl and self.use_ssl:
@@ -863,7 +876,7 @@ class Repeater:
                 self.sock.connect((ip,int(port)))
                 self.sock = self.prepare_socket(self.sock,False)
                 
-                self.packet_loop(self.sock)
+                self.packet_loop()
                 
             except socket.error as e:
                 print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
@@ -876,6 +889,8 @@ class Repeater:
     
     def impersonate_server(self):
         global g_script_module
+
+        orig_use_ssl = self.use_ssl
         
         try:
             ip = "0.0.0.0"
@@ -947,6 +962,8 @@ class Repeater:
                 #flush stdin before real commands are inserted
                 sys.stdin.flush()
             
+                # use_ssl might get changed, ie with some STARTTLS operation
+                self.use_ssl = orig_use_ssl
                 conn = self.prepare_socket(conn,True)
                 self.sock = conn
             
@@ -955,10 +972,10 @@ class Repeater:
                         self.scripter = g_script_module.PPlayScript(self, self.scripter_args)
                         self.load_scripter_defaults()          
                     
-                    self.packet_loop(conn)
+                    self.packet_loop()
                 except KeyboardInterrupt as e:
                     print_white_bright("\nCtrl-C: hit in client loop, exiting to accept loop. Hit Ctrl-C again to terminate.")
-                    conn.close()
+                    self.sock.close()
                 except socket.error as e:
                     print_white_bright("\nConnection with %s:%s terminated: %s" % (client_address[0],client_address[1],e,))
                     if self.is_udp:
@@ -968,7 +985,7 @@ class Repeater:
                 self.packet_index = 0
                 self.total_packet_index = 0
 
-            print_white("debug: end of loop.")
+            # print_white("debug: end of loop.")
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
@@ -979,19 +996,19 @@ class Repeater:
 
 
 
-    def read(self,conn,blocking=True):
+    def read(self,blocking=True):
         if have_ssl and self.use_ssl:
             data = ''
             
-            conn.setblocking(blocking)
+            self.sock.setblocking(blocking)
             while True:
                 try:
-                    pen = conn.pending()
+                    pen = self.sock.pending()
                     #print_red_bright("DEBUG: %dB pending in SSL buffer" % pen)
                     if pen == 0:
                         pen = 10240
                 
-                    data = conn.recv(pen)
+                    data = self.sock.recv(pen)
                 except ssl.SSLError as e:
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
                     if e.errno != ssl.SSL_ERROR_WANT_READ:
@@ -1001,27 +1018,27 @@ class Repeater:
                 except SystemError as e:
                     print_red_bright("read(): system error: %s" % (str(e),))
 
-                data_left = conn.pending()
+                data_left = self.sock.pending()
                 while data_left:
-                    data += conn.recv(data_left)
-                    data_left = conn.pending()
+                    data += self.sock.recv(data_left)
+                    data_left = self.sock.pending()
                 break
             
             self.tstamp_last_read = time.time()
-            conn.setblocking(True)
+            self.sock.setblocking(True)
             return data
         else:
             self.tstamp_last_read = time.time()
             if not self.is_udp:
-                conn.setblocking(True)
-                return conn.recv(24096)
+                self.sock.setblocking(True)
+                return self.sock.recv(24096)
             else:
-                data, client_address = conn.recvfrom(24096)
+                data, client_address = self.sock.recvfrom(24096)
                 self.target = client_address
-                conn.setblocking(True)
+                self.sock.setblocking(True)
                 return data
 
-    def write(self,conn,data):
+    def write(self,data):
         
         ll = len(data)
         l = 0
@@ -1029,7 +1046,7 @@ class Repeater:
         if have_ssl and self.use_ssl:
             self.tstamp_last_write = time.time()
             while l < ll:
-                r = conn.write(data[l:])
+                r = self.sock.send(data[l:])
                 l += r
                 
                 # print warning
@@ -1042,7 +1059,7 @@ class Repeater:
             self.tstamp_last_write = time.time()
             if not self.is_udp:
                 while l < ll:
-                    r = conn.send(data[l:])
+                    r = self.sock.send(data[l:])
                     l += r
                     
                     if r != ll:
@@ -1051,7 +1068,7 @@ class Repeater:
                 return l
             
             else:
-                return conn.sendto(data,self.target)
+                return self.sock.sendto(data,self.target)
 
     def load_to_send(self,role,role_index):
         who = self
@@ -1062,7 +1079,7 @@ class Repeater:
         return who.packets[to_send_idx]        
     
 
-    def send_to_send(self,conn):
+    def send_to_send(self):
         
         if self.to_send:
             self.packet_index += 1
@@ -1072,7 +1089,7 @@ class Repeater:
             total_written = 0
 
             while total_written != total_data_len:
-                cnt = self.write(conn,(str(self.to_send)))
+                cnt = self.write(str(self.to_send))
                 
                 # not really clean debug, lots of data will be duplicated
                 # if cnt > 200: cnt = 200
@@ -1101,30 +1118,30 @@ class Repeater:
         sys.exit(-2)
     
 
-    def select_wrapper(self,conn,no_writes):
+    def select_wrapper(self,no_writes):
         
-        inputs = [conn,sys.stdin]
+        inputs = [self.sock,sys.stdin]
         if self.nostdin:
             #print_red_bright("STDIN not used")
-            inputs = [conn,]
+            inputs = [self.sock,]
             
-        outputs = [conn]    
+        outputs = [self.sock]
         if no_writes:
-            outputs.remove(conn)
+            outputs.remove(self.sock)
         
         if have_ssl and self.use_ssl:
             r = []
             w = []
             e = []
             
-            if conn.pending(): r.append(conn)   # if there are bytes,
+            if self.sock.pending(): r.append(self.sock)   # if there are bytes,
             
             if not no_writes:
-                w.append(conn)                      # FIXME: we assume we can always write without select
+                w.append(self.sock)                      # FIXME: we assume we can always write without select
             
             rr,ww,ee = select(inputs,outputs,[],0.2)
-            if conn in rr:
-                r.append(conn)
+            if self.sock in rr:
+                r.append(self.sock)
             if sys.stdin in rr:
                 r.append(sys.stdin)
 
@@ -1146,9 +1163,9 @@ class Repeater:
         return self.total_packet_index >= len(self.packets)
 
 
-    def packet_read(self,conn):
+    def packet_read(self):
 
-        d = self.read(conn)
+        d = self.read()
 
         #print_red_bright("DEBUG: read returned %d" % len(d))
         if not len(d):
@@ -1165,7 +1182,7 @@ class Repeater:
             # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
             loopcount+=1
             
-            d += self.read(conn)
+            d += self.read()
             len_d = len(str(d))
             
         else:
@@ -1208,7 +1225,10 @@ class Repeater:
                     print_red_bright("# !!! %s received %sB of different data%s" % (str_time(),len(d),scripter_flag))
             
             if self.scripter:
-                self.scripter.after_received(self.whoami,self.packet_index,str(d))
+                try:
+                    self.scripter.after_received(self.whoami,self.packet_index,str(d))
+                except AttributeError:
+                    pass
                 #print_red_bright("# received data processed")
             
             # this block is printed while in the normal packet loop (there are packets still to receive or send
@@ -1240,7 +1260,7 @@ class Repeater:
         return len(d)
         
 
-    def packet_write(self,conn,cmd_hook=False):
+    def packet_write(self, cmd_hook=False):
             
         if self.packet_index >= len(self.origins[self.whoami]):
             print_yellow_bright("# [EOT]")
@@ -1255,22 +1275,31 @@ class Repeater:
                 self.to_send = self.load_to_send(self.whoami,self.packet_index)
                 
         
-                to_send_2 = None
-                if self.scripter:
-                    to_send_2 = self.scripter.before_send(self.whoami,self.packet_index,str(self.to_send))
-                    if to_send_2 != None:
-                        print_yellow_bright("# data modified by script!")
-                        self.to_send = to_send_2
+                #to_send_2 = None
+                #if self.scripter:
+                    #try:
+                        #to_send_2 = self.scripter.before_send(self.whoami,self.packet_index,str(self.to_send))
+                                
+                        
+                    #except AttributeError:
+                        ## scripter doesn't have before_send implemented
+                        #pass
+                    
+                    #if to_send_2 != None:
+                        #print_yellow_bright("# data modified by script!")
+                        #self.to_send = to_send_2
                     
                 self.ask_to_send(self.to_send)
+                
             else:
+                
                 if cmd_hook:
                     l = sys.stdin.readline()
                     
                     # readline can return empty string
                     if len(l) > 0:
                         #print_white("# --> entered: '" + l + "'")
-                        self.process_command(l.strip(),'ysclxrihN',conn)
+                        self.process_command(l.strip(),'ysclxrihN')
 
                         # in auto mode, reset current state, since we wrote into the socket
                         if option_auto_send:
@@ -1308,12 +1337,33 @@ class Repeater:
                         # indicate sending only when there are few seconds to indicate
                         if option_auto_send >= 2:
                             print_green_bright("  ... sending!")
-                            
-                        self.send_to_send(conn)
+                        
+                        been_sent = self.to_send
+                        orig_index = self.packet_index
+
+                        if self.scripter:
+                            try:
+                                to_send_2 = self.scripter.before_send(self.whoami,self.packet_index,str(self.to_send))
+                                        
+                            except AttributeError:
+                                # scripter doesn't have before_send implemented
+                                pass
+
+                        
+                        self.send_to_send()
                         self.auto_send_now = now
+                        
+                        if self.scripter:
+                            try:
+                                self.scripter.after_send(self.whoami, orig_index ,str(been_sent))
+
+                            except AttributeError:
+                                # scripter doesn't have after_send implemented
+                                pass
+                        
 
 
-    def packet_loop(self,conn):
+    def packet_loop(self):
         global option_auto_send
 
         running = 1        
@@ -1322,7 +1372,7 @@ class Repeater:
         eof_notified = False
         
         while running:
-            time.sleep(0.2)
+            #time.sleep(0.2)
             #print_red(".")
             
             if self.is_eot():
@@ -1348,34 +1398,36 @@ class Repeater:
                             self.sock.unwrap()
                     
                     print_red("Exiting on EOT")
-                    conn.shutdown(socket.SHUT_WR)
-                    conn.close()
+                    self.sock.shutdown(socket.SHUT_WR)
+                    self.sock.close()
                     sys.exit(0)
             
-            r,w,e = self.select_wrapper(conn,self.write_end)
-            
+            r,w,e = self.select_wrapper(self.write_end)
+
             #print_red_bright("DEBUG: sockets: r %s, w %s, e %s" % (str(r), str(w), str(e)))
             
-            if conn in r:
-                l = self.packet_read(conn)
+            if self.sock in r:
+                
+                l = self.packet_read()
+                
                 if l == 0:
                     print_red_bright("#--> connection closed by peer")
                     if self.exitoneot:
                         print_red("Exiting on EOT")
-                        conn.shutdown(socket.SHUT_WR)
-                        conn.close()
+                        self.sock.shutdown(socket.SHUT_WR)
+                        self.sock.close()
                         sys.exit(0)                        
                         
                     break    
         
-            if conn in w:
+            if self.sock in w:
                 if not self.write_end:
-                    self.packet_write(conn,cmd_hook=(sys.stdin in r))
-
+                    self.packet_write(cmd_hook=(sys.stdin in r))
+                    
             if self.write_end and sys.stdin in r:
                 l = sys.stdin.readline()
                 if len(l) > 0:
-                    self.process_command(l.strip(),'yclxN',conn)
+                    self.process_command(l.strip(),'yclxN')
 
                 if self.to_send:
                     self.ask_to_send()
@@ -1419,7 +1471,7 @@ class Repeater:
             print_yellow_bright("%% empty string - ignored")
         return nd
 
-    def process_command(self,l,mask,conn):
+    def process_command(self,l,mask):
         global option_auto_send
         
         #print_yellow_bright("# thank you!")
@@ -1431,7 +1483,7 @@ class Repeater:
             print_yellow_bright("# Unknown command in this context.")
         else:
             if (l.startswith("y")):
-                self.send_to_send(conn)
+                self.send_to_send()
                 
                 if self.packet_index == len(self.origins[self.whoami]):
                     print_green_bright("# %s [%d/%d]: that was our last one!!" % (str_time(),self.packet_index,len(self.origins[self.whoami])))
@@ -1443,17 +1495,17 @@ class Repeater:
 
             elif l.startswith('c'):
                 self.to_send = None # to reinit and ask again
-                cnt = self.write(conn,"\n")
+                cnt = self.write("\n")
                 print_green_bright("# %s custom '\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
 
             elif l.startswith('l'):
                 self.to_send = None # to reinit and ask again
-                cnt = self.write(conn,"\r")
+                cnt = self.write("\r")
                 print_green_bright("# %s custom '\\r' payload (%d bytes) inserted" % (str_time(),cnt,))
 
             elif l.startswith('x'):
                 self.to_send = None # to reinit and ask again
-                cnt = self.write(conn,"\r\n")
+                cnt = self.write("\r\n")
                 print_green_bright("# %s custom '\\r\\n' payload (%d bytes) inserted" % (str_time(),cnt,))
 
             elif l.startswith('r') or l.startswith('N'):
@@ -1483,7 +1535,7 @@ class Repeater:
                 self.print_help()
             
     def print_help(self):
-        print_yellow_bright("#    More commands:");
+        print_yellow_bright("#    More commands:")
         print_yellow_bright("#    i  - interrupt or continue auto-send feature. Interval=%d." % (abs(option_auto_send),))
         print_yellow_bright("#    r  - replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
         print_yellow_bright("#       - will try to match on all buffer lines")
@@ -1670,35 +1722,35 @@ def main():
                 
             r.use_ssl = True
             
-            if args.ssl3:
-                r.sslv = 3
-            if args.tls1:
-                r.sslv = 4
-            if args.tls1_1:
-                r.sslv = 5
-            if args.tls1_2:
-                r.sslv = 6
-            #if args.tls1_3:
-            #    r.sslv = 7
-            
-            if args.cert:
-                r.ssl_cert = args.cert[0]
+        if args.ssl3:
+            r.sslv = 3
+        if args.tls1:
+            r.sslv = 4
+        if args.tls1_1:
+            r.sslv = 5
+        if args.tls1_2:
+            r.sslv = 6
+        #if args.tls1_3:
+        #    r.sslv = 7
+        
+        if args.cert:
+            r.ssl_cert = args.cert[0]
 
-            if args.key:
-                r.ssl_key = args.key[0]
+        if args.key:
+            r.ssl_key = args.key[0]
+        
+        
+        if args.cipher:
+            r.ssl_cipher = ":".join(args.cipher)
             
+        if args.sni:
+            r.ssl_sni = args.sni[0]
             
-            if args.cipher:
-                r.ssl_cipher = ":".join(args.cipher)
-                
-            if args.sni:
-                r.ssl_sni = args.sni[0]
-                
-            if args.alpn:
-                r.ssl_alpn = args.alpn[0].split(',')
-                
-            if args.ecdh_curve:
-                r.ssl_ecdh_curve = args.ecdh_curve[0]
+        if args.alpn:
+            r.ssl_alpn = args.alpn[0].split(',')
+            
+        if args.ecdh_curve:
+            r.ssl_ecdh_curve = args.ecdh_curve[0]
 
                 
                 
@@ -1987,7 +2039,6 @@ def main():
                             
                         except KeyboardInterrupt as e:
                             print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
-                            
 
                         finally:
                             client.close()
