@@ -634,10 +634,11 @@ class Repeater:
         
         c = "__pplay_packed_source__ = True\n\n\n\n"
         c += "class PPlayScript:\n\n"
-        c += "    def __init__(self,pplay):\n"
+        c += "    def __init__(self, pplay, args=None):\n"
         c += "        # access to pplay engine\n"
         c += "        self.pplay = pplay\n\n"
         c += "        self.packets = []\n"
+        c += "        self.args = args\n"
         for p in self.packets:
             c += "        self.packets.append(%s)\n\n" % repr(str(p),)
         
@@ -811,7 +812,11 @@ class Repeater:
                 
         
     def impersonate_client(self):
-        global option_socks
+        global option_socks, g_script_module
+        
+        if g_script_module:
+            self.scripter = g_script_module.PPlayScript(self)
+            self.load_scripter_defaults()            
         
         try:
             self.whoami = "client"
@@ -933,8 +938,6 @@ class Repeater:
                     conn = s
                     client_address == ["",""]
                     
-                print_white("debug: mark 1")
-            
                 #flush stdin before real commands are inserted
                 sys.stdin.flush()
             
