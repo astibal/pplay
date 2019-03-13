@@ -1,0 +1,5 @@
+scapy
+colorama
+paramiko
+requests
+pysocks
