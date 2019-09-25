@@ -966,6 +966,9 @@ class Repeater:
             sys.exit(16)
 
     def read(self, blocking=True):
+
+        # print_red_bright("DEBUG: read(): blocking %d" % blocking)
+
         if have_ssl and self.use_ssl:
             data = ''
 
@@ -979,7 +982,9 @@ class Repeater:
 
                     data = self.sock.recv(pen)
                 except ssl.SSLError as e:
+                    # print_red_bright("DEBUG: read(): ssl error")
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
+
                     if e.errno != ssl.SSL_ERROR_WANT_READ:
                         raise
                     continue
@@ -1130,6 +1135,7 @@ class Repeater:
         return self.total_packet_index >= len(self.packets)
 
     def packet_read(self):
+        # print_red_bright("DEBUG: reading socket")
 
         d = self.read()
 
@@ -1143,10 +1149,18 @@ class Repeater:
         loopcount = 0
         len_expected_data = len(expected_data)
         len_d = len(str(d))
+        t_start = time.time();
 
         while len_d < len_expected_data:
             # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
             loopcount += 1
+
+            delta = time.time() - t_start
+            if delta > 1:
+                time.sleep(0.05)
+
+            if delta > 10:
+                break
 
             d += self.read()
             len_d = len(str(d))
@@ -1365,7 +1379,7 @@ class Repeater:
 
             # print_red_bright("DEBUG: sockets: r %s, w %s, e %s" % (str(r), str(w), str(e)))
 
-            if self.sock in r:
+            if self.sock in r and not self.send_aligned():
 
                 l = self.packet_read()
 
@@ -1576,8 +1590,7 @@ def main():
     prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
     prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
 
-    # if ssl.HAS_TLSv1_3:
-    #    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
+    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
 
     prot_ssl = parser.add_argument_group("SSL protocol options")
     if have_ssl:
@@ -1703,8 +1716,8 @@ def main():
             r.sslv = 5
         if args.tls1_2:
             r.sslv = 6
-        # if args.tls1_3:
-        #    r.sslv = 7
+        if args.tls1_3:
+            r.sslv = 7
 
         if args.cert:
             r.ssl_cert = args.cert[0]
