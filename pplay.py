@@ -27,7 +27,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.2"
+pplay_version = "1.7.3"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -631,7 +631,7 @@ class Repeater:
         c += "        self.packets = []\n"
         c += "        self.args = args\n"
         for p in self.packets:
-            c += "        self.packets.append(%s)\n\n" % repr(str(p), )
+            c += "        self.packets.append(b%s)\n\n" % repr(str(p), )
 
         c += "        self.origins = {}\n\n"
         c += "        self.server_port = %s\n" % (self.server_port,)
