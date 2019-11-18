@@ -6,8 +6,8 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name='pplay',
-    version='1.7.3',
-    scripts=['pplay.py'] ,
+    version='1.7.3-5',
+    scripts=['pplay.py', 'smcap2pcap' ] ,
     author="Ales Stibal",
     author_email="astib@mag0.net",
     description="tool to replay and work with pcap and smcap (smithproxy capture) files",
@@ -21,4 +21,6 @@ setuptools.setup(
         "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
         "Operating System :: OS Independent",
     ],
+    include_package_data=True,
+    install_requires=["scapy", "colorama", "paramiko", "requests", "pysocks"],
 )

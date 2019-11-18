@@ -1,4 +1,4 @@
 #!/bin/sh
-
-python setup.py bdist_wheel
+rm -rf dist/
+python setup.py sdist bdist_wheel
 python -m twine upload dist/*
