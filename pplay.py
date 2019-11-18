@@ -432,8 +432,9 @@ class Repeater:
 
                 # print("--")
                 # print("Len: %s",help(p))
-                if type(p) == type(Padding):
+                if isinstance(p, Padding) or type(p) == type(Padding):
                     print("... reached end of tcp, frame contains padding")
+                    continue
                 # print(hexdump(str(p)))
 
                 current_index = len(self.packets)
@@ -625,7 +626,7 @@ class Repeater:
 
         c = "__pplay_packed_source__ = True\n\n\n\n"
         c += "class PPlayScript:\n\n"
-        c += "    def __init__(self, pplay, args=None):\n"
+        c += "    def __init__(self, pplay=None, args=None):\n"
         c += "        # access to pplay engine\n"
         c += "        self.pplay = pplay\n\n"
         c += "        self.packets = []\n"
