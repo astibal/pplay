@@ -1,6 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-from __future__ import print_function
 
 import sys
 import os
@@ -169,10 +168,13 @@ def print_white(what):
 __vis_filter = """................................ !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[.]^_`abcdefghijklmnopqrstuvwxyz{|}~................................................................................................................................."""
 
 
-def hexdump(buf, length=16):
+def hexdump(xbuf, length=16):
     """Return a hexdump output string of the given buffer."""
     n = 0
     res = []
+
+    buf = xbuf.decode('ascii', errors="ignore")
+
     while buf:
         line, buf = buf[:length], buf[length:]
         hexa = ' '.join(['%02x' % ord(x) for x in line])
@@ -227,7 +229,7 @@ class Repeater:
         self.origins = {}
 
         # write this data :)
-        self.to_send = ''
+        self.to_send = b''
 
         # list of indexes in packets
         self.origins['client'] = []
@@ -525,7 +527,7 @@ class Repeater:
                     this_packet_index += 1
 
     def smcap_convert_lines_to_bytes(this, list_of_ords):
-        bytes = ''
+        bytes = b''
 
         for l in list_of_ords:
             for oord in l.split(" "):
@@ -632,7 +634,7 @@ class Repeater:
         c += "        self.packets = []\n"
         c += "        self.args = args\n"
         for p in self.packets:
-            c += "        self.packets.append(b%s)\n\n" % repr(str(p), )
+            c += "        self.packets.append(%s)\n\n" % (repr(p),)
 
         c += "        self.origins = {}\n\n"
         c += "        self.server_port = %s\n" % (self.server_port,)
@@ -720,7 +722,7 @@ class Repeater:
         if self.nohexdump:
             out = "# ... offer to send %dB of data (hexdump surpressed): " % (len(data),)
         else:
-            out = hexdump(str(data))
+            out = hexdump(data)
 
         if self.send_aligned():
             print_green(out)
@@ -847,12 +849,20 @@ class Repeater:
             self.sock = s
             try:
                 self.sock.connect((ip, int(port)))
-                self.sock = self.prepare_socket(self.sock, False)
+            except socket.error as e:
+                print_white_bright(" === ")
+                print_white_bright("   Connecting to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
+                return
 
+            try:
+                self.sock = self.prepare_socket(self.sock, False)
                 self.packet_loop()
 
             except socket.error as e:
-                print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
+                print_white_bright("   Connection to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
                 return
 
 
@@ -1015,6 +1025,9 @@ class Repeater:
 
     def write(self, data):
 
+        if not data:
+            return 0
+
         ll = len(data)
         l = 0
 
@@ -1063,7 +1076,7 @@ class Repeater:
             total_written = 0
 
             while total_written != total_data_len:
-                cnt = self.write(str(self.to_send))
+                cnt = self.write(self.to_send)
 
                 # not really clean debug, lots of data will be duplicated
                 # if cnt > 200: cnt = 200
@@ -1076,7 +1089,7 @@ class Repeater:
                 else:
                     print_green_bright("# ... %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (
                     str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
-                    self.to_send = str(self.to_send)[cnt:]
+                    self.to_send = self.to_send[cnt:]
 
                 total_written += cnt
 
@@ -1144,7 +1157,7 @@ class Repeater:
         if not len(d):
             return len(d)
 
-        expected_data = str(self.packets[self.total_packet_index])
+        expected_data = self.packets[self.total_packet_index]
 
         # wait for some time
         loopcount = 0
@@ -1181,13 +1194,13 @@ class Repeater:
 
             # to print what we got and what we expect
             # print_white_bright(hexdump(d))
-            # print_white_bright(hexdump(str(self.packets[self.total_packet_index])))
+            # print_white_bright(hexdump(self.packets[self.total_packet_index]))
 
             scripter_flag = ""
             if self.scripter:
                 scripter_flag = " (sending to script)"
 
-            if str(d) == str(self.packets[self.total_packet_index]):
+            if d == self.packets[self.total_packet_index]:
                 aligned = True
                 self.total_packet_index += 1
                 print_red_bright("# ... %s: received %dB OK%s" % (str_time(), len(d), scripter_flag))
@@ -1195,7 +1208,7 @@ class Repeater:
 
             else:
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
-                smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index]),
+                smatch = difflib.SequenceMatcher(None, d, self.packets[self.total_packet_index],
                                                  autojunk=False)
                 qr = smatch.ratio()
                 if qr > 0.05:
@@ -1372,7 +1385,9 @@ class Repeater:
                             self.sock.unwrap()
 
                     print_red("Exiting on EOT")
-                    self.sock.shutdown(socket.SHUT_WR)
+
+                    if not self.is_udp:
+                        self.sock.shutdown(socket.SHUT_WR)
                     self.sock.close()
                     sys.exit(0)
 
@@ -1388,7 +1403,8 @@ class Repeater:
                     print_red_bright("#--> connection closed by peer")
                     if self.exitoneot:
                         print_red("Exiting on EOT")
-                        self.sock.shutdown(socket.SHUT_WR)
+                        if not self.is_udp:
+                            self.sock.shutdown(socket.SHUT_WR)
                         self.sock.close()
                         sys.exit(0)
 
