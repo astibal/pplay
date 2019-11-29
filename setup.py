@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name='pplay',
-    version='1.7.3-5',
+    version='1.7.4-1',
     scripts=['pplay.py', 'smcap2pcap' ] ,
     author="Ales Stibal",
     author_email="astib@mag0.net",
