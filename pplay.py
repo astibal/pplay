@@ -27,7 +27,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.3"
+pplay_version = "1.7.4"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -219,7 +219,7 @@ def http_download_temp(url):
 
 class Repeater:
 
-    def __init__(self, fnm, server_ip):
+    def __init__(self, fnm, server_ip, custom_sport=None):
 
         self.fnm = fnm
 
@@ -238,6 +238,7 @@ class Repeater:
 
         self.server_port = 0
         self.custom_ip = server_ip
+        self.custom_sport = custom_sport        # custom source port (only with for client connections)
 
         self.whoami = ""
 
@@ -602,11 +603,11 @@ class Repeater:
         with open(__file__) as f:
             lines = f.read().split('\n')
 
-            for l in lines:
-                out += l
+            for single_line in lines:
+                out += single_line
                 out += "\n"
                 # print("export line: %s" % (l))
-                if l == "#EMBEDDED DATA BEGIN":
+                if single_line == "#EMBEDDED DATA BEGIN":
                     out += "\n"
                     out += ssource
                     out += "\n"
@@ -631,15 +632,19 @@ class Repeater:
         c += "        self.pplay = pplay\n\n"
         c += "        self.packets = []\n"
         c += "        self.args = args\n"
+
         for p in self.packets:
             c += "        self.packets.append(b%s)\n\n" % repr(str(p), )
 
         c += "        self.origins = {}\n\n"
         c += "        self.server_port = %s\n" % (self.server_port,)
+        c += "        self.custom_sport = %s\n" % (self.custom_sport,)
+
         for k in self.origins.keys():
             c += "        self.origins['%s']=%s\n" % (k, self.origins[k])
 
         c += "\n\n"
+
         if self.ssl_cert:
             with open(self.ssl_cert) as ca_f:
                 c += "        self.ssl_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
@@ -659,7 +664,7 @@ class Repeater:
         return None
         """
 
-        if efile == None:
+        if efile is None:
             return c
 
         f = open(efile, 'w')
@@ -690,7 +695,7 @@ class Repeater:
     def ask_to_send(self, xdata=None):
 
         data = None
-        if xdata == None:
+        if xdata is None:
             data = self.to_send
         else:
             data = xdata
@@ -845,7 +850,11 @@ class Repeater:
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip, port))
 
             self.sock = s
+
             try:
+                if self.custom_sport:
+                    self.sock.bind(('', int(self.custom_sport)))
+
                 self.sock.connect((ip, int(port)))
                 self.sock = self.prepare_socket(self.sock, False)
 
@@ -927,7 +936,7 @@ class Repeater:
                     print_white_bright("accepted client from %s:%s" % (client_address[0], client_address[1]))
                 else:
                     conn = s
-                    client_address == ["", ""]
+                    client_address = ["", ""]
 
                 # flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -1150,7 +1159,7 @@ class Repeater:
         loopcount = 0
         len_expected_data = len(expected_data)
         len_d = len(str(d))
-        t_start = time.time();
+        t_start = time.time()
 
         while len_d < len_expected_data:
             # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
@@ -1584,14 +1593,16 @@ def main():
                       help='toggle to override L3 protocol from file and send payload in TCP')
     prot.add_argument('--udp', required=False, action='store_true',
                       help='toggle to override L3 protocol from file and send payload in UDP')
+    prot.add_argument('--sport', required=False, nargs=1, help='Specify source port')
 
-    prot.add_argument('--ssl3', required=False, action='store_true',
-                      help='ssl3 ... won\'t be supported by library most likely')
-    prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
-    prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
-    prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
+    if have_ssl:
+        prot.add_argument('--ssl3', required=False, action='store_true',
+                          help='ssl3 ... won\'t be supported by library most likely')
+        prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
+        prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
+        prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
 
-    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
+        prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
 
     prot_ssl = parser.add_argument_group("SSL protocol options")
     if have_ssl:
@@ -1677,8 +1688,10 @@ def main():
 
     elif args.list:
         pass
+
     elif args.script or args.export:
         r = Repeater(None, "")
+
     elif have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
         pass
@@ -1691,11 +1704,12 @@ def main():
         print_red("SSL support          : %d" % have_ssl)
         print_red("remote SSH support   : %d" % have_paramiko)
         print_red("remote files support : %d" % have_requests)
+        print_red("Socks support        : %d" % have_socks)
 
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
-    if r != None:
+    if r is not None:
         if args.tcp:
             r.is_udp = False
 
@@ -2057,6 +2071,9 @@ def main():
                 r.nohexdump = True
 
             if args.client:
+
+                if args.sport:
+                    r.custom_sport = args.sport[0]
 
                 if len(args.client) > 0:
                     r.custom_ip = args.client[0]
