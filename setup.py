@@ -1,18 +1,20 @@
 import setuptools
+from os import path
+this_directory = path.abspath(path.dirname(__file__))
 
-with open("README.md", "r") as fh:
+with open(path.join(this_directory, 'README.rst')) as fh:
 
     long_description = fh.read()
 
 setuptools.setup(
     name='pplay',
     version='1.7.4-1',
-    scripts=['pplay.py', 'smcap2pcap' ] ,
+    scripts=['pplay.py', 'smcap2pcap'],
     author="Ales Stibal",
     author_email="astib@mag0.net",
     description="tool to replay and work with pcap and smcap (smithproxy capture) files",
     long_description=long_description,
-    long_description_content_type="text/markdown",
+    long_description_content_type="text/x-rst",
     url="https://bitbucket.org/astibal/pplay",
     packages=setuptools.find_packages(),
 
@@ -22,5 +24,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     include_package_data=True,
-    install_requires=["scapy", "colorama", "paramiko", "requests", "pysocks"],
+    install_requires=["scapy", "colorama", "paramiko", "requests", "pysocks"]
 )

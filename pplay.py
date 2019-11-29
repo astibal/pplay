@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 #!/usr/bin/env python3
+=======
+#!/usr/bin/env python2
+>>>>>>> 87f91bb... added .rs to make pypi happy (it may be removed in the future)
 
 
 import sys
