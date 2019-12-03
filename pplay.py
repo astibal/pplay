@@ -325,13 +325,15 @@ class Repeater:
                     self.ssl_key = fnm
                     g_delete_files.append(fnm)
 
-    def list_pcap(self, verbose=True):
+    def list_pcap(self, verbose=False):
 
         flows = {}
         ident = {}
         frame = -1
 
-        print_yellow(">>> Connection list:")
+        if verbose:
+            print_yellow("# >>> Flow list:")
+
         s = rdpcap(self.fnm)
         for i in s:
 
@@ -375,13 +377,38 @@ class Repeater:
             if key not in flows:
                 if verbose:
                     print_yellow("%s (starting at frame %d)" % (key, frame))
-                flows[key] = "yes"
-                ident[ident1] = proto
-                ident[ident2] = proto
+                flows[key] = (ident1, ident2)
 
-        print_yellow("\n>>> Usable connection IDs:")
+                if ident1 not in ident.keys():
+                    ident[ident1] = []
+                if ident2 not in ident.keys():
+                    ident[ident2] = []
+
+                ident[ident1].append(key)
+                ident[ident2].append(key)
+
+        print_yellow("\n# >>> Usable connection IDs:")
+        if verbose:
+            print_white("   Yellow - probably services")
+            print_white("   Green  - clients\n")
+
+        print_white("# More than 2 simplex flows:\n"
+                    "#   * source port reuse, or it's service")
+        print_white("#   * can't be used to uniquely dissect data from file.")
+
         for unique_ident in ident.keys():
-            print_yellow(unique_ident)
+
+            port = unique_ident.split(":")[1]
+            if int(port) < 1024:
+                print_yellow(unique_ident + " # %d simplex flows" % (len(ident[unique_ident]),))
+            else:
+                flow_count = len(ident[unique_ident])
+
+                if flow_count > 2:
+                    # Fore.RED + Style.BRIGHT + what + Style.RESET_ALL
+                    print_green(unique_ident + Fore.RED + " # %d simplex flows" % (len(ident[unique_ident]),))
+                else:
+                    print_green(unique_ident)
 
     def read_pcap(self, im_ip, im_port):
 
@@ -1654,6 +1681,8 @@ def main():
     var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
     var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
 
+    var.add_argument('--verbose', required=False, action='store_true', help='Print out more output.')
+
     if have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
         rem_ssh.add_argument('--remote-ssh-user', nargs=1,
@@ -1776,7 +1805,7 @@ def main():
         if args.smcap:
             r.list_smcap()
         elif have_scapy and args.pcap:
-            r.list_pcap()
+            r.list_pcap(args.verbose)
 
         sys.exit(0)
 
