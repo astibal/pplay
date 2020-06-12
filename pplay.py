@@ -1,6 +1,4 @@
-#!/usr/bin/env python2
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import sys
 import os
@@ -12,6 +10,9 @@ import argparse
 import fileinput
 import binascii
 import datetime
+import tempfile
+import json
+
 from select import select
 
 have_scapy = False
@@ -20,6 +21,7 @@ have_colorama = False
 have_ssl = False
 have_requests = False
 have_socks = False
+have_crypto = False
 
 option_dump_received_correct = False
 option_dump_received_different = True
@@ -27,7 +29,9 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.4"
+
+pplay_version = "2.0.0"
+
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -91,6 +95,21 @@ try:
     have_socks = True
 except ImportError as e:
     print('== No pysocks library support, can\'t use SOCKS proxy!', file=sys.stderr)
+
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import AuthorityInformationAccessOID
+    from cryptography.x509.oid import NameOID
+
+    have_crypto = True
+except ImportError as e:
+    print('== no cryptography library support, can\'t use CA to sign dynamic certificates based on SNI!', file=sys.stderr)
 
 
 def str_time():
@@ -169,10 +188,13 @@ def print_white(what):
 __vis_filter = """................................ !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[.]^_`abcdefghijklmnopqrstuvwxyz{|}~................................................................................................................................."""
 
 
-def hexdump(buf, length=16):
+def hexdump(xbuf, length=16):
     """Return a hexdump output string of the given buffer."""
     n = 0
     res = []
+
+    buf = xbuf.decode('ascii', errors="ignore")
+
     while buf:
         line, buf = buf[:length], buf[length:]
         hexa = ' '.join(['%02x' % ord(x) for x in line])
@@ -196,8 +218,6 @@ def colorize(s, keywords):
 # download file from HTTP and store it in /tmp/, add it to g_delete_files
 # so they are deleted at end of the program
 def http_download_temp(url):
-    import tempfile
-
     r = requests.get(url, stream=True)
     if not r:
         print_red_bright("cannot download: " + url)
@@ -217,6 +237,327 @@ def http_download_temp(url):
     return local_filename
 
 
+class SxyCA:
+
+    SETTINGS = {
+        "ca": {},
+        "srv": {},
+        "clt": {},
+        "prt": {},
+        "path": "/tmp/",
+        "ttl": 60
+    }
+
+    class Options:
+        indent = 0
+        debug = False
+
+    @staticmethod
+    def pref_choice(*args):
+        for a in args:
+            if a:
+                return a
+        return None
+
+    @staticmethod
+    def init_directories(etc_dir):
+
+        SxyCA.SETTINGS["path"] = etc_dir
+
+        for X in [
+            SxyCA.SETTINGS["path"],
+            os.path.join(SxyCA.SETTINGS["path"], "certs/"),
+            os.path.join(SxyCA.SETTINGS["path"], "certs/", "default/")]:
+
+            if not os.path.isdir(X):
+                try:
+                    os.mkdir(X)
+                except FileNotFoundError:
+                    print(SxyCA.Options.indent*" " + "fatal: path {} doesn't exit".format(X))
+                    return
+
+                except PermissionError:
+                    print(SxyCA.Options.indent*" " + "fatal: Permission denied: {}".format(X))
+                    return
+
+        SxyCA.SETTINGS["path"] = os.path.join(SxyCA.SETTINGS["path"], "certs/", "default/")
+
+    @staticmethod
+    def init_settings(cn, c, ou=None, o=None, l=None, s=None, def_subj_ca=None, def_subj_srv=None, def_subj_clt=None):
+
+        # we want to extend, but not overwrite already existing settings
+        SxyCA.load_settings()
+
+        r = SxyCA.SETTINGS
+
+        for k in ["ca", "srv", "clt", "prt"]:
+            if k not in r:
+                r[k] = {}
+
+        for k in ["ca", "srv", "clt", "prt"]:
+            if "ou" not in r[k]: r[k]["ou"] = pref_choice(ou)
+            if "o" not in r[k]:  r[k]["o"] = pref_choice("Smithproxy Software")
+            if "s" not in r[k]:  r[k]["s"] = pref_choice(s)
+            if "l" not in r[k]:  r[k]["l"] = pref_choice(l)
+            if "c" not in r[k]:  r[k]["c"] = pref_choice("CZ", c)
+
+        if "cn" not in r["ca"]:   r["ca"]["cn"] = pref_choice(def_subj_ca, "Smithproxy Root CA")
+        if "cn" not in r["srv"]:  r["srv"]["cn"] = pref_choice(def_subj_srv, "Smithproxy Server Certificate")
+        if "cn" not in r["clt"]:  r["clt"]["cn"] = pref_choice(def_subj_clt, "Smithproxy Client Certificate")
+        if "cn" not in r["prt"]:  r["prt"]["cn"] = "Smithproxy Portal Certificate"
+
+        if "settings" not in r["ca"]: r["ca"]["settings"] = {
+            "grant_ca": "false"
+        }
+
+        # print("config to be written: %s" % (r,))
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "w") as f:
+                json.dump(r, f, indent=4)
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "write_default_settings: exception caught: " + str(e))
+
+    @staticmethod
+    def load_settings():
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "r") as f:
+                r = json.load(f)
+                if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "load_settings: loaded settings: {}", str(r))
+
+                SxyCA.SETTINGS = r
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "load_default_settings: exception caught: " + str(e))
+
+    @staticmethod
+    def generate_rsa_key(size):
+        return rsa.generate_private_key(public_exponent=65537, key_size=size, backend=default_backend())
+
+    @staticmethod
+    def load_key(fnm, pwd=None):
+        with open(fnm, "rb") as key_file:
+            return serialization.load_pem_private_key(key_file.read(), password=pwd, backend=default_backend())
+
+    @staticmethod
+    def generate_ec_key(curve=ec.SECP256R1):
+        return ec.generate_private_key(curve=curve, backend=default_backend())
+
+    @staticmethod
+    def save_key(key, keyfile, passphrase=None):
+        # inner function
+        def choose_enc(pwd):
+            if not pwd:
+                return serialization.NoEncryption()
+            return serialization.BestAvailableEncryption(pwd)
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS['path'], keyfile), "wb") as f:
+                f.write(key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=choose_enc(passphrase),
+                ))
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "save_key: exception caught: " + str(e))
+
+
+    NameOIDMap = {
+        "cn": NameOID.COMMON_NAME,
+        "ou": NameOID.ORGANIZATIONAL_UNIT_NAME,
+        "o": NameOID.ORGANIZATION_NAME,
+        "l": NameOID.LOCALITY_NAME,
+        "s": NameOID.STATE_OR_PROVINCE_NAME,
+        "c": NameOID.COUNTRY_NAME
+    }
+
+    @staticmethod
+    def construct_sn(profile, sn_override=None):
+        snlist = []
+
+        override = sn_override
+        if not sn_override:
+            override = {}
+
+        for subj_entry in ["cn", "ou", "o", "l", "s", "c"]:
+            if subj_entry in override and subj_entry in SxyCA.NameOIDMap:
+                snlist.append(x509.NameAttribute(SxyCA.NameOIDMap[subj_entry], override[subj_entry]))
+
+            elif subj_entry in SxyCA.SETTINGS[profile] and SxyCA.SETTINGS[profile][subj_entry] and subj_entry in SxyCA.NameOIDMap:
+                snlist.append(x509.NameAttribute(SxyCA.NameOIDMap[subj_entry], SxyCA.SETTINGS[profile][subj_entry]))
+
+        return snlist
+
+    @staticmethod
+    def generate_csr(key, profile, sans_dns=None, sans_ip=None, isca=False, custom_subj=None):
+
+        cn = SxyCA.SETTINGS[profile]["cn"].replace(" ", "-")
+        sn = x509.Name(SxyCA.construct_sn(profile, custom_subj))
+
+        sans_list = [x509.DNSName(cn)]
+
+        if sans_dns:
+            for s in sans_dns:
+                if s == cn:
+                    continue
+                sans_list.append(x509.DNSName(s))
+
+        if sans_ip:
+            try:
+                import ipaddress
+                for i in sans_ip:
+                    ii = ipaddress.ip_address(i)
+                    sans_list.append(x509.IPAddress(ii))
+            except ImportError:
+                # cannot use ipaddress module
+                pass
+
+        sans = x509.SubjectAlternativeName(sans_list)
+
+        builder = x509.CertificateSigningRequestBuilder()
+        builder = builder.subject_name(sn)
+
+        if sans:
+            builder = builder.add_extension(sans, critical=False)
+
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=isca, path_length=None), critical=True)
+
+        if (isca):
+            builder = builder.add_extension(x509.KeyUsage(crl_sign=True, key_cert_sign=True,
+                                                          digital_signature=False, content_commitment=False,
+                                                          key_encipherment=False, data_encipherment=False,
+                                                          key_agreement=False, encipher_only=False,
+                                                          decipher_only=False),
+                                            critical=True)
+
+        else:
+            builder = builder.add_extension(x509.KeyUsage(crl_sign=False, key_cert_sign=False,
+                                                          digital_signature=True, content_commitment=False,
+                                                          key_encipherment=True, data_encipherment=False,
+                                                          key_agreement=False, encipher_only=False,
+                                                          decipher_only=False),
+                                            critical=True)
+            ex = []
+            ex.append(x509.oid.ExtendedKeyUsageOID.SERVER_AUTH)
+            ex.append(x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH)
+            builder = builder.add_extension(x509.ExtendedKeyUsage(ex), critical=False)
+
+        csr = builder.sign(key, hashes.SHA256(), default_backend())
+
+        return csr
+
+    @staticmethod
+    def sign_csr(key, csr, caprofile, arg_valid=0, isca=False, cacert=None, aia_issuers=None, ocsp_responders=None):
+
+        valid = 30
+        if arg_valid > 0:
+            valid = arg_valid
+        else:
+            try:
+                valid = SxyCA.SETTINGS["ttl"]
+            except KeyError:
+                pass
+
+
+
+        one_day = datetime.timedelta(1, 0, 0)
+
+        builder = x509.CertificateBuilder()
+        builder = builder.subject_name(csr.subject)
+
+        if not cacert:
+            builder = builder.issuer_name(x509.Name(construct_sn(caprofile)))
+        else:
+            builder = builder.issuer_name(cacert.subject)
+
+        builder = builder.not_valid_before(datetime.datetime.today() - one_day)
+        builder = builder.not_valid_after(datetime.datetime.today() + (one_day * valid))
+        # builder = builder.serial_number(x509.random_serial_number()) # too new to some systems
+        builder = builder.serial_number(int.from_bytes(os.urandom(10), byteorder="big"))
+        builder = builder.public_key(csr.public_key())
+
+        builder = builder.add_extension(x509.SubjectKeyIdentifier.from_public_key(csr.public_key()), critical=False)
+
+        # more info about issuer
+
+        has_ski = False
+        try:
+            if cacert:
+                ski = cacert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+                builder = builder.add_extension(x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski.value),
+                                                critical=False)
+                has_ski = True
+        except AttributeError:
+            # this is workaround for older versions of python cryptography, not having from_issuer_subject_key_identifier
+            # -> which throws AttributeError
+            has_ski = False
+        except x509.extensions.ExtensionNotFound:
+            has_ski = False
+
+        if not has_ski:
+            builder = builder.add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),
+                                            critical=False)
+
+        all_aias = []
+        if aia_issuers:
+            for loc in aia_issuers:
+                aia_uri = x509.AccessDescription(AuthorityInformationAccessOID.CA_ISSUERS,
+                                                 x509.UniformResourceIdentifier(loc))
+                all_aias.append(aia_uri)
+
+        if ocsp_responders:
+            for resp in ocsp_responders:
+                aia_uri = x509.AccessDescription(AuthorityInformationAccessOID.OCSP, x509.UniformResourceIdentifier(resp))
+                all_aias.append(aia_uri)
+
+        if all_aias:
+            alist = x509.AuthorityInformationAccess(all_aias)
+            builder = builder.add_extension(alist, critical=False)
+
+        if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "sign CSR: == extensions ==")
+
+        for e in csr.extensions:
+            if isinstance(e.value, x509.BasicConstraints):
+                if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "sign CSR: %s" % (e.oid,))
+
+                if e.value.ca:
+                    if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA=TRUE requested")
+
+                    if isca and not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA not allowed but overridden")
+                    elif not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA not allowed by rule")
+                        continue
+                    else:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA allowed by rule")
+
+            builder = builder.add_extension(e.value, e.critical)
+
+        certificate = builder.sign(private_key=key, algorithm=hashes.SHA256(), backend=default_backend())
+        return certificate
+
+    @staticmethod
+    def save_certificate(cert, certfile):
+        try:
+            with open(os.path.join(SxyCA.SETTINGS['path'], certfile), "wb") as f:
+                f.write(cert.public_bytes(
+                    encoding=serialization.Encoding.PEM))
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "save_certificate: exception caught: " + str(e))
+
+    @staticmethod
+    def load_certificate(fnm):
+        with open(fnm, 'r', encoding='utf-8') as f:
+            ff = f.read()
+            return x509.load_pem_x509_certificate(ff.encode('ascii'), backend=default_backend())
+
+
+
 class Repeater:
 
     def __init__(self, fnm, server_ip, custom_sport=None):
@@ -227,7 +568,7 @@ class Repeater:
         self.origins = {}
 
         # write this data :)
-        self.to_send = ''
+        self.to_send = b''
 
         # list of indexes in packets
         self.origins['client'] = []
@@ -260,6 +601,8 @@ class Repeater:
         self.ssl_ecdh_curve = None
         self.ssl_cert = None
         self.ssl_key = None
+        self.ssl_ca_cert = None
+        self.ssl_ca_key = None
 
         self.tstamp_last_read = 0
         self.tstamp_last_write = 0
@@ -282,10 +625,18 @@ class Repeater:
         # countdown timer for sending
         self.send_countdown = 0
 
+    # write @txt to temp file and return its full path
+    def deploy_tmp_file(self, text):
+        h, fnm = tempfile.mkstemp()
+        o = os.fdopen(h, "w")
+        o.write(text)
+        o.close()
+
+        g_delete_files.append(fnm)
+        return fnm
+
     def load_scripter_defaults(self):
         global g_delete_files
-
-        import tempfile
 
         if self.scripter:
 
@@ -294,30 +645,32 @@ class Repeater:
             self.origins = self.scripter.origins
 
             has_cert = False
+            has_ca = False
+
+            if self.scripter.ssl_cert and self.scripter.ssl_key:
+                has_cert = True
+
+            if self.scripter.ssl_ca_cert and self.scripter.ssl_ca_key:
+                has_ca = True
+
             try:
-                if self.scripter.ssl_cert and self.scripter.ssl_key:
-                    has_cert = True
-            except Exception as e:
-                print("Script ssl certs: %s" % str(e))
+                if has_cert:
+                    if self.scripter.ssl_cert and not self.ssl_cert:
+                        self.ssl_cert = self.deploy_tmp_file(self.scripter.ssl_cert)
 
-            if has_cert:
-                if self.scripter.ssl_cert and not self.ssl_cert:
-                    h, fnm = tempfile.mkstemp()
-                    o = os.fdopen(h, "w")
-                    o.write(self.scripter.ssl_cert)
-                    o.close()
+                    if self.scripter.ssl_key and not self.ssl_key:
+                        self.ssl_key = self.deploy_tmp_file(self.scripter.ssl_key)
 
-                    self.ssl_cert = fnm
-                    g_delete_files.append(fnm)
+                if has_ca:
+                    if self.scripter.ssl_ca_cert and not self.ssl_ca_cert:
+                        self.ssl_ca_cert = self.deploy_tmp_file(self.scripter.ssl_ca_cert)
+                        print("deployed temp ca cert:" + self.ssl_ca_cert)
 
-                if self.scripter.ssl_key and not self.ssl_key:
-                    h, fnm = tempfile.mkstemp()
-                    o = os.fdopen(h, "w")
-                    o.write(self.scripter.ssl_key)
-                    o.close()
-
-                    self.ssl_key = fnm
-                    g_delete_files.append(fnm)
+                    if self.scripter.ssl_ca_key and not self.ssl_ca_key:
+                        self.ssl_ca_key = self.deploy_tmp_file(self.scripter.ssl_ca_key)
+                        print("deployed temp ca key:" + self.ssl_ca_key)
+            except IOError as e:
+                print("error deploying temporary files: " + str(e))
 
     def list_pcap(self, verbose=False):
 
@@ -553,7 +906,7 @@ class Repeater:
                     this_packet_index += 1
 
     def smcap_convert_lines_to_bytes(this, list_of_ords):
-        bytes = ''
+        bytes = b''
 
         for l in list_of_ords:
             for oord in l.split(" "):
@@ -633,14 +986,17 @@ class Repeater:
             for single_line in lines:
                 out += single_line
                 out += "\n"
-                # print("export line: %s" % (l))
-                if single_line == "#EMBEDDED DATA BEGIN":
+
+                # print("export line: %s" % (single_line))
+                if single_line == "# EMBEDDED DATA BEGIN":
+
                     out += "\n"
                     out += ssource
                     out += "\n"
 
                     import hashlib
-                    out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(ssource).hexdigest() + "\"\n"
+                    out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(
+                        ssource.encode('utf-8')).hexdigest() + "\"\n"
 
         with open(efile, "w") as o:
             o.write(out)
@@ -648,7 +1004,7 @@ class Repeater:
 
     def export_script(self, efile):
 
-        if os.path.isfile(efile):
+        if efile and os.path.isfile(efile):
             print_red_bright("refusing to overwrite already existing file!")
             return None
 
@@ -661,7 +1017,7 @@ class Repeater:
         c += "        self.args = args\n"
 
         for p in self.packets:
-            c += "        self.packets.append(b%s)\n\n" % repr(str(p), )
+            c += "        self.packets.append(%s)\n\n" % (repr(p),)
 
         c += "        self.origins = {}\n\n"
         c += "        self.server_port = %s\n" % (self.server_port,)
@@ -681,6 +1037,15 @@ class Repeater:
                 c += "        self.ssl_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
 
         c += "\n\n"
+        if self.ssl_ca_cert:
+            with open(self.ssl_ca_cert) as ca_f:
+                c += "        self.ssl_ca_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
+
+        if self.ssl_ca_key:
+            with open(self.ssl_ca_key) as key_f:
+                c += "        self.ssl_ca_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
+
+        c += "\n\n"
         c += """
     def before_send(self,role,index,data):
         # when None returned, no changes will be applied and packets[ origins[role][index] ] will be used
@@ -691,12 +1056,13 @@ class Repeater:
         return None
         """
 
-        if efile is None:
-            return c
+        if not efile:
 
-        f = open(efile, 'w')
-        f.write(c)
-        f.close()
+            return c
+        else:
+            f = open(efile, 'w')
+            f.write(c.decode('utf-8'))
+            f.close()
 
         return None
 
@@ -752,7 +1118,7 @@ class Repeater:
         if self.nohexdump:
             out = "# ... offer to send %dB of data (hexdump surpressed): " % (len(data),)
         else:
-            out = hexdump(str(data))
+            out = hexdump(data)
 
         if self.send_aligned():
             print_green(out)
@@ -789,50 +1155,69 @@ class Repeater:
         else:
             return False
 
+    def prepare_ssl_socket(self, s, server_side, on_sni=False):
+
+        if not server_side:
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+
+            if self.sslv > 0:
+                sv = 3
+                self.ssl_context.options |= ssl.OP_NO_SSLv2
+                for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
+                    if sv == self.sslv:
+                        sv = sv + 1
+                        continue
+
+                    self.ssl_context.options |= v
+                    sv = sv + 1
+
+                # disable tls1.3
+                if self.sslv < 7 and ssl.HAS_TLSv1_3:
+                    self.ssl_context.options |= ssl.OP_NO_TLSv1_3
+
+            if self.ssl_cipher:
+                self.ssl_context.set_ciphers(self.ssl_cipher)
+
+            if self.ssl_alpn:
+                self.ssl_context.set_alpn_protocols(self.ssl_alpn)
+
+            return self.ssl_context.wrap_socket(s, server_hostname=self.ssl_sni, suppress_ragged_eofs=True)
+        else:
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+            if self.sslv > 0:
+                sv = 3
+                self.ssl_context.options |= ssl.OP_NO_SSLv2
+                for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
+                    if sv == self.sslv:
+                        sv = sv + 1
+                        continue
+
+                    self.ssl_context.options |= v
+                    sv = sv + 1
+
+                # disable tls1.3
+                if self.sslv < 7 and ssl.HAS_TLSv1_3:
+                    self.ssl_context.options |= ssl.OP_NO_TLSv1_3
+
+            if self.ssl_cipher:
+                self.ssl_context.set_ciphers(self.ssl_cipher)
+
+            if self.ssl_ecdh_curve:
+                self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
+
+            if self.ssl_cert and self.ssl_key:
+                self.ssl_context.load_cert_chain(certfile=self.ssl_cert, keyfile=self.ssl_key)
+
+            if not on_sni:
+                self.ssl_context.sni_callback = self.imp_server_ssl_callback
+                return self.ssl_context.wrap_socket(s, server_side=True)
+            else:
+                s.context = self.ssl_context
+                return s
+
     def prepare_socket(self, s, server_side=False):
         if have_ssl and self.use_ssl:
-            if not server_side:
-                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-
-                if self.sslv > 0:
-                    sv = 3
-                    self.ssl_context.options |= ssl.OP_NO_SSLv2
-                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
-                        if sv == self.sslv:
-                            sv = sv + 1
-                            continue
-
-                        self.ssl_context.options |= v
-                        sv = sv + 1
-
-                if self.ssl_cipher:
-                    self.ssl_context.set_ciphers(self.ssl_cipher)
-
-                if self.ssl_alpn:
-                    self.ssl_context.set_alpn_protocols(self.ssl_alpn)
-
-                return self.ssl_context.wrap_socket(s, server_hostname=self.ssl_sni, suppress_ragged_eofs=True)
-            else:
-                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-                if self.sslv > 0:
-                    sv = 3
-                    self.ssl_context.options |= ssl.OP_NO_SSLv2
-                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
-                        if sv == self.sslv:
-                            sv = sv + 1
-                            continue
-
-                        self.ssl_context.options |= v
-                        sv = sv + 1
-
-                if self.ssl_cipher:
-                    self.ssl_context.set_ciphers(self.ssl_cipher)
-
-                if self.ssl_ecdh_curve:
-                    self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
-
-                self.ssl_context.load_cert_chain(certfile=self.ssl_cert, keyfile=self.ssl_key)
-                return self.ssl_context.wrap_socket(s, server_side=True)
+            return self.prepare_ssl_socket(s, server_side)
         else:
             return s
 
@@ -883,18 +1268,84 @@ class Repeater:
                     self.sock.bind(('', int(self.custom_sport)))
 
                 self.sock.connect((ip, int(port)))
-                self.sock = self.prepare_socket(self.sock, False)
+            except socket.error as e:
+                print_white_bright(" === ")
+                print_white_bright("   Connecting to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
+                return
 
+            try:
+                self.sock = self.prepare_socket(self.sock, False)
                 self.packet_loop()
 
             except socket.error as e:
-                print_white_bright("Connection to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
+                print_white_bright("   Connection to %s:%s failed: %s" % (ip, port, e))
+                print_white_bright(" === ")
                 return
 
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
             return
+
+    def imp_server_ssl_callback(self, sock, sni, ctx):
+        print_white("requested SNI: %s" % (sni,))
+        if not sni:
+            if self.ssl_sni:
+                print_yellow("using default explicit SNI: " + self.ssl_sni)
+                sni = self.ssl_sni
+            else:
+                sni = "server.pplay.cloud"
+                print_yellow("using fallback SNI: " + sni)
+
+        if not have_crypto:
+            # no cryptography ... ok - either we have server cert provided, or we are doomed.
+
+            if not self.ssl_cert or not self.ssl_key:
+                print_red_bright("neither having cryptography (no CA signing), nor certificate pair")
+                print_red_bright("this won't end up well.")
+            return
+
+        try:
+            sslca_root = "/tmp/pplay-ca"
+            SxyCA.init_directories(sslca_root)
+            SxyCA.init_settings(cn=None, c=None)
+            SxyCA.load_settings()
+
+            if self.ssl_ca_cert and self.ssl_ca_key:
+                ca_key = SxyCA.load_key(self.ssl_ca_key)
+                ca_cert = SxyCA.load_certificate(self.ssl_ca_cert)
+
+                prt_key = SxyCA.generate_rsa_key(2048)
+                prt_csr = SxyCA.generate_csr(prt_key, "srv", sans_dns=[sni, ], sans_ip=None,
+                                             custom_subj={"cn": sni})
+                prt_cert = SxyCA.sign_csr(ca_key, prt_csr, "srv", cacert=ca_cert)
+
+                tmp_key_file = \
+                tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-key-")[1]
+                g_delete_files.append(tmp_key_file)
+
+                tmp_cert_file = \
+                tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-cert-")[1]
+                g_delete_files.append(tmp_cert_file)
+
+                SxyCA.save_key(prt_key, os.path.basename(tmp_key_file))
+                SxyCA.save_certificate(prt_cert, os.path.basename(tmp_cert_file))
+
+                self.ssl_key = tmp_key_file
+                self.ssl_cert = tmp_cert_file
+
+                self.prepare_ssl_socket(sock, server_side=True, on_sni=True)
+
+                print_green("spoofing cert for sni:%s finished" % (sni,))
+            else:
+                print_red("CA key or CA cert not specified, fallback to pre-set certificate")
+
+        except Exception as e:
+            print_red("error in SNI handler: " + str(e))
+            print_red("fallback to pre-set certificate")
+            raise e
 
     def impersonate_server(self):
         global g_script_module
@@ -1051,6 +1502,9 @@ class Repeater:
 
     def write(self, data):
 
+        if not data:
+            return 0
+
         ll = len(data)
         l = 0
 
@@ -1099,7 +1553,7 @@ class Repeater:
             total_written = 0
 
             while total_written != total_data_len:
-                cnt = self.write(str(self.to_send))
+                cnt = self.write(self.to_send)
 
                 # not really clean debug, lots of data will be duplicated
                 # if cnt > 200: cnt = 200
@@ -1108,11 +1562,11 @@ class Repeater:
 
                 if cnt == data_len:
                     print_green_bright("# ... %s [%d/%d]: has been sent (%d bytes)" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami]), cnt))
+                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt))
                 else:
                     print_green_bright("# ... %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
-                    self.to_send = str(self.to_send)[cnt:]
+                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
+                    self.to_send = self.to_send[cnt:]
 
                 total_written += cnt
 
@@ -1180,7 +1634,7 @@ class Repeater:
         if not len(d):
             return len(d)
 
-        expected_data = str(self.packets[self.total_packet_index])
+        expected_data = self.packets[self.total_packet_index]
 
         # wait for some time
         loopcount = 0
@@ -1217,13 +1671,13 @@ class Repeater:
 
             # to print what we got and what we expect
             # print_white_bright(hexdump(d))
-            # print_white_bright(hexdump(str(self.packets[self.total_packet_index])))
+            # print_white_bright(hexdump(self.packets[self.total_packet_index]))
 
             scripter_flag = ""
             if self.scripter:
                 scripter_flag = " (sending to script)"
 
-            if str(d) == str(self.packets[self.total_packet_index]):
+            if d == self.packets[self.total_packet_index]:
                 aligned = True
                 self.total_packet_index += 1
                 print_red_bright("# ... %s: received %dB OK%s" % (str_time(), len(d), scripter_flag))
@@ -1231,7 +1685,7 @@ class Repeater:
 
             else:
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
-                smatch = difflib.SequenceMatcher(None, str(d), str(self.packets[self.total_packet_index]),
+                smatch = difflib.SequenceMatcher(None, d, self.packets[self.total_packet_index],
                                                  autojunk=False)
                 qr = smatch.ratio()
                 if qr > 0.05:
@@ -1408,7 +1862,9 @@ class Repeater:
                             self.sock.unwrap()
 
                     print_red("Exiting on EOT")
-                    self.sock.shutdown(socket.SHUT_WR)
+
+                    if not self.is_udp:
+                        self.sock.shutdown(socket.SHUT_WR)
                     self.sock.close()
                     sys.exit(0)
 
@@ -1424,7 +1880,8 @@ class Repeater:
                     print_red_bright("#--> connection closed by peer")
                     if self.exitoneot:
                         print_red("Exiting on EOT")
-                        self.sock.shutdown(socket.SHUT_WR)
+                        if not self.is_udp:
+                            self.sock.shutdown(socket.SHUT_WR)
                         self.sock.close()
                         sys.exit(0)
 
@@ -1498,7 +1955,7 @@ class Repeater:
 
                 if self.packet_index == len(self.origins[self.whoami]):
                     print_green_bright("# %s [%d/%d]: that was our last one!!" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami])))
+                        str_time(), self.packet_index, len(self.origins[self.whoami])))
 
             elif l.startswith('s'):
                 self.packet_index += 1
@@ -1638,6 +2095,12 @@ def main():
         prot_ssl.add_argument('--key', required=False, nargs=1,
                               help='key of certificate (PEM format) for --server mode')
 
+        if have_crypto:
+            prot_ssl.add_argument('--cakey', required=False, nargs=1, help='use to self-sign server-side '
+                                                                           'connections based on received SNI')
+            prot_ssl.add_argument('--cacert', required=False, nargs=1, help='signing CA certificate to be used'
+                                                                            'in conjunction with --ca-key')
+
         prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
         prot_ssl.add_argument('--sni', required=False, nargs=1,
                               help='specify remote server name (SNI extension, client only)')
@@ -1735,6 +2198,11 @@ def main():
         print_red("remote files support : %d" % have_requests)
         print_red("Socks support        : %d" % have_socks)
 
+        if have_ssl:
+            print("")
+            print_red("CA signing support   : %d" % have_crypto)
+
+
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
@@ -1780,6 +2248,12 @@ def main():
 
         if args.ecdh_curve:
             r.ssl_ecdh_curve = args.ecdh_curve[0]
+
+        if args.cacert:
+            r.ssl_ca_cert = args.cacert[0]
+
+        if args.cakey:
+            r.ssl_ca_key = args.cakey[0]
 
     if args.list:
         if args.smcap:
@@ -1887,6 +2361,12 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
+            if args.ca_cert:
+                r.ssl_ca_cert = args.cacert[0]
+
+            if args.ca_key:
+                r.ssl_ca_key = args.cakey[0]
+
             export_file = args.export[0]
             if r.export_script(export_file):
                 print_white_bright("Template python script has been exported to file %s" % (export_file,))
@@ -1900,6 +2380,12 @@ def main():
 
             if args.key:
                 r.ssl_key = args.key[0]
+
+            if args.cacert:
+                r.ssl_ca_cert = args.cacert[0]
+
+            if args.cakey:
+                r.ssl_ca_key = args.cakey[0]
 
             r.export_self(pack_file)
             print_white_bright("Exporting self to file %s" % (pack_file,))
@@ -1943,7 +2429,7 @@ def main():
                         # print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
 
                     if not have_script:
-                        import tempfile
+
                         print_white_bright(
                             "remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
 
@@ -2074,11 +2560,16 @@ def main():
                     sys.exit(-1)
 
                 if args.server:
-                    if not args.key and not args.script:
-                        print_red_bright("error: SSL server requires --key argument")
-                        sys.exit(-1)
-                    if not args.cert and not args.script:
-                        print_red_bright("error: SSL server requires --cert argument")
+                    if not (
+                            (args.key and args.cert)
+                            or
+                            (args.cakey and args.cacert)
+                           ) and not args.script:
+
+                        print_red_bright("error: SSL server requires: \n"
+                                         "      --key and --cert for exact server certificate\n"
+                                         "   -or- \n"
+                                         "      --cakey and --cacert argument for generated certs by CA\n")
                         sys.exit(-1)
 
                 r.use_ssl = True

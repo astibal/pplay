@@ -3,3 +3,4 @@ colorama
 paramiko
 requests
 pysocks
+cryptography
