@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import sys
 import os
 import socket
@@ -30,7 +29,9 @@ option_auto_send = 5
 
 option_socks = None
 
+
 pplay_version = "2.0.0"
+
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -985,8 +986,10 @@ class Repeater:
             for single_line in lines:
                 out += single_line
                 out += "\n"
+
                 # print("export line: %s" % (single_line))
                 if single_line == "# EMBEDDED DATA BEGIN":
+
                     out += "\n"
                     out += ssource
                     out += "\n"
@@ -1054,6 +1057,7 @@ class Repeater:
         """
 
         if not efile:
+
             return c
         else:
             f = open(efile, 'w')
@@ -2193,9 +2197,11 @@ def main():
         print_red("remote SSH support   : %d" % have_paramiko)
         print_red("remote files support : %d" % have_requests)
         print_red("Socks support        : %d" % have_socks)
+
         if have_ssl:
             print("")
             print_red("CA signing support   : %d" % have_crypto)
+
 
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
