@@ -12,6 +12,7 @@ import fileinput
 import binascii
 import datetime
 import tempfile
+import json
 
 from select import select
 
@@ -21,6 +22,7 @@ have_colorama = False
 have_ssl = False
 have_requests = False
 have_socks = False
+have_crypto = False
 
 option_dump_received_correct = False
 option_dump_received_different = True
@@ -92,6 +94,21 @@ try:
     have_socks = True
 except ImportError as e:
     print('== No pysocks library support, can\'t use SOCKS proxy!', file=sys.stderr)
+
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import AuthorityInformationAccessOID
+    from cryptography.x509.oid import NameOID
+
+    have_crypto = True
+except ImportError as e:
+    print('== no cryptography library support, can\'t use CA to sign dynamic certificates based on SNI!', file=sys.stderr)
 
 
 def str_time():
@@ -217,6 +234,327 @@ def http_download_temp(url):
         print_green("downloaded file into " + local_filename)
 
     return local_filename
+
+
+class SxyCA:
+
+    SETTINGS = {
+        "ca": {},
+        "srv": {},
+        "clt": {},
+        "prt": {},
+        "path": "/tmp/",
+        "ttl": 60
+    }
+
+    class Options:
+        indent = 0
+        debug = False
+
+    @staticmethod
+    def pref_choice(*args):
+        for a in args:
+            if a:
+                return a
+        return None
+
+    @staticmethod
+    def init_directories(etc_dir):
+
+        SxyCA.SETTINGS["path"] = etc_dir
+
+        for X in [
+            SxyCA.SETTINGS["path"],
+            os.path.join(SxyCA.SETTINGS["path"], "certs/"),
+            os.path.join(SxyCA.SETTINGS["path"], "certs/", "default/")]:
+
+            if not os.path.isdir(X):
+                try:
+                    os.mkdir(X)
+                except FileNotFoundError:
+                    print(SxyCA.Options.indent*" " + "fatal: path {} doesn't exit".format(X))
+                    return
+
+                except PermissionError:
+                    print(SxyCA.Options.indent*" " + "fatal: Permission denied: {}".format(X))
+                    return
+
+        SxyCA.SETTINGS["path"] = os.path.join(SxyCA.SETTINGS["path"], "certs/", "default/")
+
+    @staticmethod
+    def init_settings(cn, c, ou=None, o=None, l=None, s=None, def_subj_ca=None, def_subj_srv=None, def_subj_clt=None):
+
+        # we want to extend, but not overwrite already existing settings
+        SxyCA.load_settings()
+
+        r = SxyCA.SETTINGS
+
+        for k in ["ca", "srv", "clt", "prt"]:
+            if k not in r:
+                r[k] = {}
+
+        for k in ["ca", "srv", "clt", "prt"]:
+            if "ou" not in r[k]: r[k]["ou"] = pref_choice(ou)
+            if "o" not in r[k]:  r[k]["o"] = pref_choice("Smithproxy Software")
+            if "s" not in r[k]:  r[k]["s"] = pref_choice(s)
+            if "l" not in r[k]:  r[k]["l"] = pref_choice(l)
+            if "c" not in r[k]:  r[k]["c"] = pref_choice("CZ", c)
+
+        if "cn" not in r["ca"]:   r["ca"]["cn"] = pref_choice(def_subj_ca, "Smithproxy Root CA")
+        if "cn" not in r["srv"]:  r["srv"]["cn"] = pref_choice(def_subj_srv, "Smithproxy Server Certificate")
+        if "cn" not in r["clt"]:  r["clt"]["cn"] = pref_choice(def_subj_clt, "Smithproxy Client Certificate")
+        if "cn" not in r["prt"]:  r["prt"]["cn"] = "Smithproxy Portal Certificate"
+
+        if "settings" not in r["ca"]: r["ca"]["settings"] = {
+            "grant_ca": "false"
+        }
+
+        # print("config to be written: %s" % (r,))
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "w") as f:
+                json.dump(r, f, indent=4)
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "write_default_settings: exception caught: " + str(e))
+
+    @staticmethod
+    def load_settings():
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "r") as f:
+                r = json.load(f)
+                if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "load_settings: loaded settings: {}", str(r))
+
+                SxyCA.SETTINGS = r
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "load_default_settings: exception caught: " + str(e))
+
+    @staticmethod
+    def generate_rsa_key(size):
+        return rsa.generate_private_key(public_exponent=65537, key_size=size, backend=default_backend())
+
+    @staticmethod
+    def load_key(fnm, pwd=None):
+        with open(fnm, "rb") as key_file:
+            return serialization.load_pem_private_key(key_file.read(), password=pwd, backend=default_backend())
+
+    @staticmethod
+    def generate_ec_key(curve=ec.SECP256R1):
+        return ec.generate_private_key(curve=curve, backend=default_backend())
+
+    @staticmethod
+    def save_key(key, keyfile, passphrase=None):
+        # inner function
+        def choose_enc(pwd):
+            if not pwd:
+                return serialization.NoEncryption()
+            return serialization.BestAvailableEncryption(pwd)
+
+        try:
+            with open(os.path.join(SxyCA.SETTINGS['path'], keyfile), "wb") as f:
+                f.write(key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=choose_enc(passphrase),
+                ))
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "save_key: exception caught: " + str(e))
+
+
+    NameOIDMap = {
+        "cn": NameOID.COMMON_NAME,
+        "ou": NameOID.ORGANIZATIONAL_UNIT_NAME,
+        "o": NameOID.ORGANIZATION_NAME,
+        "l": NameOID.LOCALITY_NAME,
+        "s": NameOID.STATE_OR_PROVINCE_NAME,
+        "c": NameOID.COUNTRY_NAME
+    }
+
+    @staticmethod
+    def construct_sn(profile, sn_override=None):
+        snlist = []
+
+        override = sn_override
+        if not sn_override:
+            override = {}
+
+        for subj_entry in ["cn", "ou", "o", "l", "s", "c"]:
+            if subj_entry in override and subj_entry in SxyCA.NameOIDMap:
+                snlist.append(x509.NameAttribute(SxyCA.NameOIDMap[subj_entry], override[subj_entry]))
+
+            elif subj_entry in SxyCA.SETTINGS[profile] and SxyCA.SETTINGS[profile][subj_entry] and subj_entry in SxyCA.NameOIDMap:
+                snlist.append(x509.NameAttribute(SxyCA.NameOIDMap[subj_entry], SxyCA.SETTINGS[profile][subj_entry]))
+
+        return snlist
+
+    @staticmethod
+    def generate_csr(key, profile, sans_dns=None, sans_ip=None, isca=False, custom_subj=None):
+
+        cn = SxyCA.SETTINGS[profile]["cn"].replace(" ", "-")
+        sn = x509.Name(SxyCA.construct_sn(profile, custom_subj))
+
+        sans_list = [x509.DNSName(cn)]
+
+        if sans_dns:
+            for s in sans_dns:
+                if s == cn:
+                    continue
+                sans_list.append(x509.DNSName(s))
+
+        if sans_ip:
+            try:
+                import ipaddress
+                for i in sans_ip:
+                    ii = ipaddress.ip_address(i)
+                    sans_list.append(x509.IPAddress(ii))
+            except ImportError:
+                # cannot use ipaddress module
+                pass
+
+        sans = x509.SubjectAlternativeName(sans_list)
+
+        builder = x509.CertificateSigningRequestBuilder()
+        builder = builder.subject_name(sn)
+
+        if sans:
+            builder = builder.add_extension(sans, critical=False)
+
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=isca, path_length=None), critical=True)
+
+        if (isca):
+            builder = builder.add_extension(x509.KeyUsage(crl_sign=True, key_cert_sign=True,
+                                                          digital_signature=False, content_commitment=False,
+                                                          key_encipherment=False, data_encipherment=False,
+                                                          key_agreement=False, encipher_only=False,
+                                                          decipher_only=False),
+                                            critical=True)
+
+        else:
+            builder = builder.add_extension(x509.KeyUsage(crl_sign=False, key_cert_sign=False,
+                                                          digital_signature=True, content_commitment=False,
+                                                          key_encipherment=True, data_encipherment=False,
+                                                          key_agreement=False, encipher_only=False,
+                                                          decipher_only=False),
+                                            critical=True)
+            ex = []
+            ex.append(x509.oid.ExtendedKeyUsageOID.SERVER_AUTH)
+            ex.append(x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH)
+            builder = builder.add_extension(x509.ExtendedKeyUsage(ex), critical=False)
+
+        csr = builder.sign(key, hashes.SHA256(), default_backend())
+
+        return csr
+
+    @staticmethod
+    def sign_csr(key, csr, caprofile, arg_valid=0, isca=False, cacert=None, aia_issuers=None, ocsp_responders=None):
+
+        valid = 30
+        if arg_valid > 0:
+            valid = arg_valid
+        else:
+            try:
+                valid = SxyCA.SETTINGS["ttl"]
+            except KeyError:
+                pass
+
+
+
+        one_day = datetime.timedelta(1, 0, 0)
+
+        builder = x509.CertificateBuilder()
+        builder = builder.subject_name(csr.subject)
+
+        if not cacert:
+            builder = builder.issuer_name(x509.Name(construct_sn(caprofile)))
+        else:
+            builder = builder.issuer_name(cacert.subject)
+
+        builder = builder.not_valid_before(datetime.datetime.today() - one_day)
+        builder = builder.not_valid_after(datetime.datetime.today() + (one_day * valid))
+        # builder = builder.serial_number(x509.random_serial_number()) # too new to some systems
+        builder = builder.serial_number(int.from_bytes(os.urandom(10), byteorder="big"))
+        builder = builder.public_key(csr.public_key())
+
+        builder = builder.add_extension(x509.SubjectKeyIdentifier.from_public_key(csr.public_key()), critical=False)
+
+        # more info about issuer
+
+        has_ski = False
+        try:
+            if cacert:
+                ski = cacert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+                builder = builder.add_extension(x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski.value),
+                                                critical=False)
+                has_ski = True
+        except AttributeError:
+            # this is workaround for older versions of python cryptography, not having from_issuer_subject_key_identifier
+            # -> which throws AttributeError
+            has_ski = False
+        except x509.extensions.ExtensionNotFound:
+            has_ski = False
+
+        if not has_ski:
+            builder = builder.add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),
+                                            critical=False)
+
+        all_aias = []
+        if aia_issuers:
+            for loc in aia_issuers:
+                aia_uri = x509.AccessDescription(AuthorityInformationAccessOID.CA_ISSUERS,
+                                                 x509.UniformResourceIdentifier(loc))
+                all_aias.append(aia_uri)
+
+        if ocsp_responders:
+            for resp in ocsp_responders:
+                aia_uri = x509.AccessDescription(AuthorityInformationAccessOID.OCSP, x509.UniformResourceIdentifier(resp))
+                all_aias.append(aia_uri)
+
+        if all_aias:
+            alist = x509.AuthorityInformationAccess(all_aias)
+            builder = builder.add_extension(alist, critical=False)
+
+        if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "sign CSR: == extensions ==")
+
+        for e in csr.extensions:
+            if isinstance(e.value, x509.BasicConstraints):
+                if(SxyCA.Options.debug): print(SxyCA.Options.indent*" " + "sign CSR: %s" % (e.oid,))
+
+                if e.value.ca:
+                    if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA=TRUE requested")
+
+                    if isca and not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA not allowed but overridden")
+                    elif not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA not allowed by rule")
+                        continue
+                    else:
+                        if(SxyCA.Options.debug): print((SxyCA.Options.indent+2)*" " + "           CA allowed by rule")
+
+            builder = builder.add_extension(e.value, e.critical)
+
+        certificate = builder.sign(private_key=key, algorithm=hashes.SHA256(), backend=default_backend())
+        return certificate
+
+    @staticmethod
+    def save_certificate(cert, certfile):
+        try:
+            with open(os.path.join(SxyCA.SETTINGS['path'], certfile), "wb") as f:
+                f.write(cert.public_bytes(
+                    encoding=serialization.Encoding.PEM))
+
+        except Exception as e:
+            print(SxyCA.Options.indent*" " + "save_certificate: exception caught: " + str(e))
+
+    @staticmethod
+    def load_certificate(fnm):
+        with open(fnm, 'r', encoding='utf-8') as f:
+            ff = f.read()
+            return x509.load_pem_x509_certificate(ff.encode('ascii'), backend=default_backend())
+
 
 
 class Repeater:
@@ -957,27 +1295,28 @@ class Repeater:
                 sni = "server.pplay.cloud"
                 print_yellow("using fallback SNI: " + sni)
 
-        try:
-            from sslca import sxyca
-        except ImportError as e:
-            print_red_bright("cannot load sslca module: " + str(e))
-            print_red("fallback to pre-set certificate")
+        if not have_crypto:
+            # no cryptography ... ok - either we have server cert provided, or we are doomed.
+
+            if not self.ssl_cert or not self.ssl_key:
+                print_red_bright("neither having cryptography (no CA signing), nor certificate pair")
+                print_red_bright("this won't end up well.")
             return
 
         try:
             sslca_root = "/tmp/pplay-ca"
-            sxyca.init_directories(sslca_root)
-            sxyca.init_settings(cn=None, c=None)
-            sxyca.load_settings()
+            SxyCA.init_directories(sslca_root)
+            SxyCA.init_settings(cn=None, c=None)
+            SxyCA.load_settings()
 
             if self.ssl_ca_cert and self.ssl_ca_key:
-                ca_key = sxyca.load_key(self.ssl_ca_key)
-                ca_cert = sxyca.load_certificate(self.ssl_ca_cert)
+                ca_key = SxyCA.load_key(self.ssl_ca_key)
+                ca_cert = SxyCA.load_certificate(self.ssl_ca_cert)
 
-                prt_key = sxyca.generate_rsa_key(2048)
-                prt_csr = sxyca.generate_csr(prt_key, "srv", sans_dns=[sni, ], sans_ip=None,
+                prt_key = SxyCA.generate_rsa_key(2048)
+                prt_csr = SxyCA.generate_csr(prt_key, "srv", sans_dns=[sni, ], sans_ip=None,
                                              custom_subj={"cn": sni})
-                prt_cert = sxyca.sign_csr(ca_key, prt_csr, "srv", cacert=ca_cert)
+                prt_cert = SxyCA.sign_csr(ca_key, prt_csr, "srv", cacert=ca_cert)
 
                 tmp_key_file = \
                 tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-key-")[1]
@@ -987,8 +1326,8 @@ class Repeater:
                 tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-cert-")[1]
                 g_delete_files.append(tmp_cert_file)
 
-                sxyca.save_key(prt_key, os.path.basename(tmp_key_file))
-                sxyca.save_certificate(prt_cert, os.path.basename(tmp_cert_file))
+                SxyCA.save_key(prt_key, os.path.basename(tmp_key_file))
+                SxyCA.save_certificate(prt_cert, os.path.basename(tmp_cert_file))
 
                 self.ssl_key = tmp_key_file
                 self.ssl_cert = tmp_cert_file
@@ -1002,6 +1341,7 @@ class Repeater:
         except Exception as e:
             print_red("error in SNI handler: " + str(e))
             print_red("fallback to pre-set certificate")
+            raise e
 
     def impersonate_server(self):
         global g_script_module
@@ -1751,10 +2091,11 @@ def main():
         prot_ssl.add_argument('--key', required=False, nargs=1,
                               help='key of certificate (PEM format) for --server mode')
 
-        prot_ssl.add_argument('--cakey', required=False, nargs=1, help='use to self-sign server-side '
-                                                                       'connections based on received SNI')
-        prot_ssl.add_argument('--cacert', required=False, nargs=1, help='signing CA certificate to be used'
-                                                                        'in conjunction with --ca-key')
+        if have_crypto:
+            prot_ssl.add_argument('--cakey', required=False, nargs=1, help='use to self-sign server-side '
+                                                                           'connections based on received SNI')
+            prot_ssl.add_argument('--cacert', required=False, nargs=1, help='signing CA certificate to be used'
+                                                                            'in conjunction with --ca-key')
 
         prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
         prot_ssl.add_argument('--sni', required=False, nargs=1,
@@ -1852,6 +2193,9 @@ def main():
         print_red("remote SSH support   : %d" % have_paramiko)
         print_red("remote files support : %d" % have_requests)
         print_red("Socks support        : %d" % have_socks)
+        if have_ssl:
+            print("")
+            print_red("CA signing support   : %d" % have_crypto)
 
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
