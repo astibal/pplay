@@ -221,7 +221,7 @@ def http_download_temp(url):
 
 class Repeater:
 
-    def __init__(self, fnm, server_ip):
+    def __init__(self, fnm, server_ip, custom_sport=None):
 
         self.fnm = fnm
 
@@ -240,6 +240,7 @@ class Repeater:
 
         self.server_port = 0
         self.custom_ip = server_ip
+        self.custom_sport = custom_sport        # custom source port (only with for client connections)
 
         self.whoami = ""
 
@@ -332,13 +333,15 @@ class Repeater:
             except IOError as e:
                 print("error deploying temporary files: " + str(e))
 
-    def list_pcap(self, verbose=True):
+    def list_pcap(self, verbose=False):
 
         flows = {}
         ident = {}
         frame = -1
 
-        print_yellow(">>> Connection list:")
+        if verbose:
+            print_yellow("# >>> Flow list:")
+
         s = rdpcap(self.fnm)
         for i in s:
 
@@ -382,13 +385,38 @@ class Repeater:
             if key not in flows:
                 if verbose:
                     print_yellow("%s (starting at frame %d)" % (key, frame))
-                flows[key] = "yes"
-                ident[ident1] = proto
-                ident[ident2] = proto
+                flows[key] = (ident1, ident2)
 
-        print_yellow("\n>>> Usable connection IDs:")
+                if ident1 not in ident.keys():
+                    ident[ident1] = []
+                if ident2 not in ident.keys():
+                    ident[ident2] = []
+
+                ident[ident1].append(key)
+                ident[ident2].append(key)
+
+        print_yellow("\n# >>> Usable connection IDs:")
+        if verbose:
+            print_white("   Yellow - probably services")
+            print_white("   Green  - clients\n")
+
+        print_white("# More than 2 simplex flows:\n"
+                    "#   * source port reuse, or it's service")
+        print_white("#   * can't be used to uniquely dissect data from file.")
+
         for unique_ident in ident.keys():
-            print_yellow(unique_ident)
+
+            port = unique_ident.split(":")[1]
+            if int(port) < 1024:
+                print_yellow(unique_ident + " # %d simplex flows" % (len(ident[unique_ident]),))
+            else:
+                flow_count = len(ident[unique_ident])
+
+                if flow_count > 2:
+                    # Fore.RED + Style.BRIGHT + what + Style.RESET_ALL
+                    print_green(unique_ident + Fore.RED + " # %d simplex flows" % (len(ident[unique_ident]),))
+                else:
+                    print_green(unique_ident)
 
     def read_pcap(self, im_ip, im_port):
 
@@ -616,11 +644,11 @@ class Repeater:
         with open(__file__) as f:
             lines = f.read().split('\n')
 
-            for l in lines:
-                out += l
+            for single_line in lines:
+                out += single_line
                 out += "\n"
-                # print("export line: %s" % (l))
-                if l == "# EMBEDDED DATA BEGIN":
+                # print("export line: %s" % (single_line))
+                if single_line == "# EMBEDDED DATA BEGIN":
                     out += "\n"
                     out += ssource
                     out += "\n"
@@ -646,15 +674,19 @@ class Repeater:
         c += "        self.pplay = pplay\n\n"
         c += "        self.packets = []\n"
         c += "        self.args = args\n"
+
         for p in self.packets:
             c += "        self.packets.append(%s)\n\n" % (repr(p),)
 
         c += "        self.origins = {}\n\n"
         c += "        self.server_port = %s\n" % (self.server_port,)
+        c += "        self.custom_sport = %s\n" % (self.custom_sport,)
+
         for k in self.origins.keys():
             c += "        self.origins['%s']=%s\n" % (k, self.origins[k])
 
         c += "\n\n"
+
         if self.ssl_cert:
             with open(self.ssl_cert) as ca_f:
                 c += "        self.ssl_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
@@ -714,7 +746,7 @@ class Repeater:
     def ask_to_send(self, xdata=None):
 
         data = None
-        if xdata == None:
+        if xdata is None:
             data = self.to_send
         else:
             data = xdata
@@ -888,7 +920,11 @@ class Repeater:
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip, port))
 
             self.sock = s
+
             try:
+                if self.custom_sport:
+                    self.sock.bind(('', int(self.custom_sport)))
+
                 self.sock.connect((ip, int(port)))
             except socket.error as e:
                 print_white_bright(" === ")
@@ -1034,7 +1070,7 @@ class Repeater:
                     print_white_bright("accepted client from %s:%s" % (client_address[0], client_address[1]))
                 else:
                     conn = s
-                    client_address == ["", ""]
+                    client_address = ["", ""]
 
                 # flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -1260,7 +1296,7 @@ class Repeater:
         loopcount = 0
         len_expected_data = len(expected_data)
         len_d = len(str(d))
-        t_start = time.time();
+        t_start = time.time()
 
         while len_d < len_expected_data:
             # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
@@ -1697,14 +1733,16 @@ def main():
                       help='toggle to override L3 protocol from file and send payload in TCP')
     prot.add_argument('--udp', required=False, action='store_true',
                       help='toggle to override L3 protocol from file and send payload in UDP')
+    prot.add_argument('--sport', required=False, nargs=1, help='Specify source port')
 
-    prot.add_argument('--ssl3', required=False, action='store_true',
-                      help='ssl3 ... won\'t be supported by library most likely')
-    prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
-    prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
-    prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
+    if have_ssl:
+        prot.add_argument('--ssl3', required=False, action='store_true',
+                          help='ssl3 ... won\'t be supported by library most likely')
+        prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
+        prot.add_argument('--tls1_1', required=False, action='store_true', help='use tls 1.1')
+        prot.add_argument('--tls1_2', required=False, action='store_true', help='use tls 1.2')
 
-    prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
+        prot.add_argument('--tls1_3', required=False, action='store_true', help='use tls 1.3 (library claims support)')
 
     prot_ssl = parser.add_argument_group("SSL protocol options")
     if have_ssl:
@@ -1740,6 +1778,8 @@ def main():
                      help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
     var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
     var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
+
+    var.add_argument('--verbose', required=False, action='store_true', help='Print out more output.')
 
     if have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
@@ -1795,8 +1835,10 @@ def main():
 
     elif args.list:
         pass
+
     elif args.script or args.export:
         r = Repeater(None, "")
+
     elif have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
         pass
@@ -1809,11 +1851,12 @@ def main():
         print_red("SSL support          : %d" % have_ssl)
         print_red("remote SSH support   : %d" % have_paramiko)
         print_red("remote files support : %d" % have_requests)
+        print_red("Socks support        : %d" % have_socks)
 
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
-    if r != None:
+    if r is not None:
         if args.tcp:
             r.is_udp = False
 
@@ -1866,7 +1909,7 @@ def main():
         if args.smcap:
             r.list_smcap()
         elif have_scapy and args.pcap:
-            r.list_pcap()
+            r.list_pcap(args.verbose)
 
         sys.exit(0)
 
@@ -2198,6 +2241,9 @@ def main():
                 r.nohexdump = True
 
             if args.client:
+
+                if args.sport:
+                    r.custom_sport = args.sport[0]
 
                 if len(args.client) > 0:
                     r.custom_ip = args.client[0]
