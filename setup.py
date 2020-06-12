@@ -13,7 +13,7 @@ setuptools.setup(
     description="tool to replay and work with pcap and smcap (smithproxy capture) files",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://bitbucket.org/astibal/pplay",
+    url="https://github.com/astibal/pplay",
     packages=setuptools.find_packages(),
 
     classifiers=[

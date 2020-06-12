@@ -11,6 +11,8 @@ import argparse
 import fileinput
 import binascii
 import datetime
+import tempfile
+
 from select import select
 
 have_scapy = False
@@ -26,7 +28,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "1.7.3"
+pplay_version = "2.0.0"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -198,8 +200,6 @@ def colorize(s, keywords):
 # download file from HTTP and store it in /tmp/, add it to g_delete_files
 # so they are deleted at end of the program
 def http_download_temp(url):
-    import tempfile
-
     r = requests.get(url, stream=True)
     if not r:
         print_red_bright("cannot download: " + url)
@@ -261,6 +261,8 @@ class Repeater:
         self.ssl_ecdh_curve = None
         self.ssl_cert = None
         self.ssl_key = None
+        self.ssl_ca_cert = None
+        self.ssl_ca_key = None
 
         self.tstamp_last_read = 0
         self.tstamp_last_write = 0
@@ -283,10 +285,18 @@ class Repeater:
         # countdown timer for sending
         self.send_countdown = 0
 
+    # write @txt to temp file and return its full path
+    def deploy_tmp_file(self, text):
+        h, fnm = tempfile.mkstemp()
+        o = os.fdopen(h, "w")
+        o.write(text)
+        o.close()
+
+        g_delete_files.append(fnm)
+        return fnm
+
     def load_scripter_defaults(self):
         global g_delete_files
-
-        import tempfile
 
         if self.scripter:
 
@@ -295,30 +305,32 @@ class Repeater:
             self.origins = self.scripter.origins
 
             has_cert = False
+            has_ca = False
+
+            if self.scripter.ssl_cert and self.scripter.ssl_key:
+                has_cert = True
+
+            if self.scripter.ssl_ca_cert and self.scripter.ssl_ca_key:
+                has_ca = True
+
             try:
-                if self.scripter.ssl_cert and self.scripter.ssl_key:
-                    has_cert = True
-            except Exception as e:
-                print("Script ssl certs: %s" % str(e))
+                if has_cert:
+                    if self.scripter.ssl_cert and not self.ssl_cert:
+                        self.ssl_cert = self.deploy_tmp_file(self.scripter.ssl_cert)
 
-            if has_cert:
-                if self.scripter.ssl_cert and not self.ssl_cert:
-                    h, fnm = tempfile.mkstemp()
-                    o = os.fdopen(h, "w")
-                    o.write(self.scripter.ssl_cert)
-                    o.close()
+                    if self.scripter.ssl_key and not self.ssl_key:
+                        self.ssl_key = self.deploy_tmp_file(self.scripter.ssl_key)
 
-                    self.ssl_cert = fnm
-                    g_delete_files.append(fnm)
+                if has_ca:
+                    if self.scripter.ssl_ca_cert and not self.ssl_ca_cert:
+                        self.ssl_ca_cert = self.deploy_tmp_file(self.scripter.ssl_ca_cert)
+                        print("deployed temp ca cert:" + self.ssl_ca_cert)
 
-                if self.scripter.ssl_key and not self.ssl_key:
-                    h, fnm = tempfile.mkstemp()
-                    o = os.fdopen(h, "w")
-                    o.write(self.scripter.ssl_key)
-                    o.close()
-
-                    self.ssl_key = fnm
-                    g_delete_files.append(fnm)
+                    if self.scripter.ssl_ca_key and not self.ssl_ca_key:
+                        self.ssl_ca_key = self.deploy_tmp_file(self.scripter.ssl_ca_key)
+                        print("deployed temp ca key:" + self.ssl_ca_key)
+            except IOError as e:
+                print("error deploying temporary files: " + str(e))
 
     def list_pcap(self, verbose=True):
 
@@ -608,13 +620,14 @@ class Repeater:
                 out += l
                 out += "\n"
                 # print("export line: %s" % (l))
-                if l == "#EMBEDDED DATA BEGIN":
+                if l == "# EMBEDDED DATA BEGIN":
                     out += "\n"
                     out += ssource
                     out += "\n"
 
                     import hashlib
-                    out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(ssource).hexdigest() + "\"\n"
+                    out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(
+                        ssource.encode('utf-8')).hexdigest() + "\"\n"
 
         with open(efile, "w") as o:
             o.write(out)
@@ -622,7 +635,7 @@ class Repeater:
 
     def export_script(self, efile):
 
-        if os.path.isfile(efile):
+        if efile and os.path.isfile(efile):
             print_red_bright("refusing to overwrite already existing file!")
             return None
 
@@ -651,6 +664,15 @@ class Repeater:
                 c += "        self.ssl_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
 
         c += "\n\n"
+        if self.ssl_ca_cert:
+            with open(self.ssl_ca_cert) as ca_f:
+                c += "        self.ssl_ca_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
+
+        if self.ssl_ca_key:
+            with open(self.ssl_ca_key) as key_f:
+                c += "        self.ssl_ca_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
+
+        c += "\n\n"
         c += """
     def before_send(self,role,index,data):
         # when None returned, no changes will be applied and packets[ origins[role][index] ] will be used
@@ -661,12 +683,12 @@ class Repeater:
         return None
         """
 
-        if efile == None:
+        if not efile:
             return c
-
-        f = open(efile, 'w')
-        f.write(c)
-        f.close()
+        else:
+            f = open(efile, 'w')
+            f.write(c.decode('utf-8'))
+            f.close()
 
         return None
 
@@ -759,50 +781,69 @@ class Repeater:
         else:
             return False
 
+    def prepare_ssl_socket(self, s, server_side, on_sni=False):
+
+        if not server_side:
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+
+            if self.sslv > 0:
+                sv = 3
+                self.ssl_context.options |= ssl.OP_NO_SSLv2
+                for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
+                    if sv == self.sslv:
+                        sv = sv + 1
+                        continue
+
+                    self.ssl_context.options |= v
+                    sv = sv + 1
+
+                # disable tls1.3
+                if self.sslv < 7 and ssl.HAS_TLSv1_3:
+                    self.ssl_context.options |= ssl.OP_NO_TLSv1_3
+
+            if self.ssl_cipher:
+                self.ssl_context.set_ciphers(self.ssl_cipher)
+
+            if self.ssl_alpn:
+                self.ssl_context.set_alpn_protocols(self.ssl_alpn)
+
+            return self.ssl_context.wrap_socket(s, server_hostname=self.ssl_sni, suppress_ragged_eofs=True)
+        else:
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+            if self.sslv > 0:
+                sv = 3
+                self.ssl_context.options |= ssl.OP_NO_SSLv2
+                for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
+                    if sv == self.sslv:
+                        sv = sv + 1
+                        continue
+
+                    self.ssl_context.options |= v
+                    sv = sv + 1
+
+                # disable tls1.3
+                if self.sslv < 7 and ssl.HAS_TLSv1_3:
+                    self.ssl_context.options |= ssl.OP_NO_TLSv1_3
+
+            if self.ssl_cipher:
+                self.ssl_context.set_ciphers(self.ssl_cipher)
+
+            if self.ssl_ecdh_curve:
+                self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
+
+            if self.ssl_cert and self.ssl_key:
+                self.ssl_context.load_cert_chain(certfile=self.ssl_cert, keyfile=self.ssl_key)
+
+            if not on_sni:
+                self.ssl_context.sni_callback = self.imp_server_ssl_callback
+                return self.ssl_context.wrap_socket(s, server_side=True)
+            else:
+                s.context = self.ssl_context
+                return s
+
     def prepare_socket(self, s, server_side=False):
         if have_ssl and self.use_ssl:
-            if not server_side:
-                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-
-                if self.sslv > 0:
-                    sv = 3
-                    self.ssl_context.options |= ssl.OP_NO_SSLv2
-                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
-                        if sv == self.sslv:
-                            sv = sv + 1
-                            continue
-
-                        self.ssl_context.options |= v
-                        sv = sv + 1
-
-                if self.ssl_cipher:
-                    self.ssl_context.set_ciphers(self.ssl_cipher)
-
-                if self.ssl_alpn:
-                    self.ssl_context.set_alpn_protocols(self.ssl_alpn)
-
-                return self.ssl_context.wrap_socket(s, server_hostname=self.ssl_sni, suppress_ragged_eofs=True)
-            else:
-                self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-                if self.sslv > 0:
-                    sv = 3
-                    self.ssl_context.options |= ssl.OP_NO_SSLv2
-                    for v in [ssl.OP_NO_SSLv3, ssl.OP_NO_TLSv1, ssl.OP_NO_TLSv1_1, ssl.OP_NO_TLSv1_2]:
-                        if sv == self.sslv:
-                            sv = sv + 1
-                            continue
-
-                        self.ssl_context.options |= v
-                        sv = sv + 1
-
-                if self.ssl_cipher:
-                    self.ssl_context.set_ciphers(self.ssl_cipher)
-
-                if self.ssl_ecdh_curve:
-                    self.ssl_context.set_ecdh_curve(self.ssl_ecdh_curve)
-
-                self.ssl_context.load_cert_chain(certfile=self.ssl_cert, keyfile=self.ssl_key)
-                return self.ssl_context.wrap_socket(s, server_side=True)
+            return self.prepare_ssl_socket(s, server_side)
         else:
             return s
 
@@ -869,6 +910,62 @@ class Repeater:
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
             return
+
+    def imp_server_ssl_callback(self, sock, sni, ctx):
+        print_white("requested SNI: %s" % (sni,))
+        if not sni:
+            if self.ssl_sni:
+                print_yellow("using default explicit SNI: " + self.ssl_sni)
+                sni = self.ssl_sni
+            else:
+                sni = "server.pplay.cloud"
+                print_yellow("using fallback SNI: " + sni)
+
+        try:
+            from sslca import sxyca
+        except ImportError as e:
+            print_red_bright("cannot load sslca module: " + str(e))
+            print_red("fallback to pre-set certificate")
+            return
+
+        try:
+            sslca_root = "/tmp/pplay-ca"
+            sxyca.init_directories(sslca_root)
+            sxyca.init_settings(cn=None, c=None)
+            sxyca.load_settings()
+
+            if self.ssl_ca_cert and self.ssl_ca_key:
+                ca_key = sxyca.load_key(self.ssl_ca_key)
+                ca_cert = sxyca.load_certificate(self.ssl_ca_cert)
+
+                prt_key = sxyca.generate_rsa_key(2048)
+                prt_csr = sxyca.generate_csr(prt_key, "srv", sans_dns=[sni, ], sans_ip=None,
+                                             custom_subj={"cn": sni})
+                prt_cert = sxyca.sign_csr(ca_key, prt_csr, "srv", cacert=ca_cert)
+
+                tmp_key_file = \
+                tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-key-")[1]
+                g_delete_files.append(tmp_key_file)
+
+                tmp_cert_file = \
+                tempfile.mkstemp(dir=os.path.join(sslca_root, "certs/", "default/"), prefix="sni-cert-")[1]
+                g_delete_files.append(tmp_cert_file)
+
+                sxyca.save_key(prt_key, os.path.basename(tmp_key_file))
+                sxyca.save_certificate(prt_cert, os.path.basename(tmp_cert_file))
+
+                self.ssl_key = tmp_key_file
+                self.ssl_cert = tmp_cert_file
+
+                self.prepare_ssl_socket(sock, server_side=True, on_sni=True)
+
+                print_green("spoofing cert for sni:%s finished" % (sni,))
+            else:
+                print_red("CA key or CA cert not specified, fallback to pre-set certificate")
+
+        except Exception as e:
+            print_red("error in SNI handler: " + str(e))
+            print_red("fallback to pre-set certificate")
 
     def impersonate_server(self):
         global g_script_module
@@ -1085,10 +1182,10 @@ class Repeater:
 
                 if cnt == data_len:
                     print_green_bright("# ... %s [%d/%d]: has been sent (%d bytes)" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami]), cnt))
+                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt))
                 else:
                     print_green_bright("# ... %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
+                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
                     self.to_send = self.to_send[cnt:]
 
                 total_written += cnt
@@ -1478,7 +1575,7 @@ class Repeater:
 
                 if self.packet_index == len(self.origins[self.whoami]):
                     print_green_bright("# %s [%d/%d]: that was our last one!!" % (
-                    str_time(), self.packet_index, len(self.origins[self.whoami])))
+                        str_time(), self.packet_index, len(self.origins[self.whoami])))
 
             elif l.startswith('s'):
                 self.packet_index += 1
@@ -1615,6 +1712,11 @@ def main():
         prot_ssl.add_argument('--cert', required=False, nargs=1, help='certificate (PEM format) for --server mode')
         prot_ssl.add_argument('--key', required=False, nargs=1,
                               help='key of certificate (PEM format) for --server mode')
+
+        prot_ssl.add_argument('--cakey', required=False, nargs=1, help='use to self-sign server-side '
+                                                                       'connections based on received SNI')
+        prot_ssl.add_argument('--cacert', required=False, nargs=1, help='signing CA certificate to be used'
+                                                                        'in conjunction with --ca-key')
 
         prot_ssl.add_argument('--cipher', required=False, nargs=1, help='specify ciphers based on openssl cipher list')
         prot_ssl.add_argument('--sni', required=False, nargs=1,
@@ -1754,6 +1856,12 @@ def main():
         if args.ecdh_curve:
             r.ssl_ecdh_curve = args.ecdh_curve[0]
 
+        if args.cacert:
+            r.ssl_ca_cert = args.cacert[0]
+
+        if args.cakey:
+            r.ssl_ca_key = args.cakey[0]
+
     if args.list:
         if args.smcap:
             r.list_smcap()
@@ -1860,6 +1968,12 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
+            if args.ca_cert:
+                r.ssl_ca_cert = args.cacert[0]
+
+            if args.ca_key:
+                r.ssl_ca_key = args.cakey[0]
+
             export_file = args.export[0]
             if r.export_script(export_file):
                 print_white_bright("Template python script has been exported to file %s" % (export_file,))
@@ -1873,6 +1987,12 @@ def main():
 
             if args.key:
                 r.ssl_key = args.key[0]
+
+            if args.cacert:
+                r.ssl_ca_cert = args.cacert[0]
+
+            if args.cakey:
+                r.ssl_ca_key = args.cakey[0]
 
             r.export_self(pack_file)
             print_white_bright("Exporting self to file %s" % (pack_file,))
@@ -1916,7 +2036,7 @@ def main():
                         # print_red_bright("!!! this source is not produced by --pack, all required files must be available on your remote!")
 
                     if not have_script:
-                        import tempfile
+
                         print_white_bright(
                             "remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
 
@@ -2047,11 +2167,16 @@ def main():
                     sys.exit(-1)
 
                 if args.server:
-                    if not args.key and not args.script:
-                        print_red_bright("error: SSL server requires --key argument")
-                        sys.exit(-1)
-                    if not args.cert and not args.script:
-                        print_red_bright("error: SSL server requires --cert argument")
+                    if not (
+                            (args.key and args.cert)
+                            or
+                            (args.cakey and args.cacert)
+                           ) and not args.script:
+
+                        print_red_bright("error: SSL server requires: \n"
+                                         "      --key and --cert for exact server certificate\n"
+                                         "   -or- \n"
+                                         "      --cakey and --cacert argument for generated certs by CA\n")
                         sys.exit(-1)
 
                 r.use_ssl = True
