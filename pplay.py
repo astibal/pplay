@@ -1000,6 +1000,7 @@ class Repeater:
 
         with open(efile, "w") as o:
             o.write(out)
+            os.chmod(efile, 0o755)
             # print_red("pack: using " + efile)
 
     def export_script(self, efile):
@@ -1031,19 +1032,30 @@ class Repeater:
         if self.ssl_cert:
             with open(self.ssl_cert) as ca_f:
                 c += "        self.ssl_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
+        else:
+            c += "        self.ssl_cert=None\n"
 
         if self.ssl_key:
             with open(self.ssl_key) as key_f:
                 c += "        self.ssl_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
+        else:
+            c += "        self.ssl_key=None\n"
+
 
         c += "\n\n"
         if self.ssl_ca_cert:
             with open(self.ssl_ca_cert) as ca_f:
                 c += "        self.ssl_ca_cert=\"\"\"\n" + ca_f.read() + "\n\"\"\"\n"
+        else:
+            c += "        self.ssl_ca_cert=None\n"
+
 
         if self.ssl_ca_key:
             with open(self.ssl_ca_key) as key_f:
                 c += "        self.ssl_ca_key=\"\"\"\n" + key_f.read() + "\n\"\"\"\n"
+        else:
+            c += "        self.ssl_ca_key=None\n"
+
 
         c += "\n\n"
         c += """
@@ -1063,6 +1075,7 @@ class Repeater:
             f = open(efile, 'w')
             f.write(c.decode('utf-8'))
             f.close()
+
 
         return None
 
@@ -2135,6 +2148,15 @@ def main():
 
     args = parser.parse_args(sys.argv[1:])
 
+    try:
+        if __pplay_packed_source__ == True:
+            print_red_bright("... using packed parameters")
+            args.script = []
+            args.script.append('+')
+
+    except Exception:
+        pass
+
     if have_colorama:
         if not args.nocolor:
             colorama.init(autoreset=False, strip=False)
@@ -2304,7 +2326,6 @@ def main():
 
         except ImportError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
-            # print_red(pprint.pformat(sys.))
             sys.exit(-2)
         except AttributeError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
