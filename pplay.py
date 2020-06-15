@@ -193,7 +193,7 @@ def hexdump(xbuf, length=16):
     n = 0
     res = []
 
-    buf = xbuf.decode('ascii', errors="ignore")
+    buf = bytes(xbuf).decode('ascii', errors="ignore")
 
     while buf:
         line, buf = buf[:length], buf[length:]
@@ -820,7 +820,7 @@ class Repeater:
 
                 current_index = len(self.packets)
 
-                self.packets.append(p)
+                self.packets.append(bytes(p))
                 self.origins[origin].append(current_index)
 
                 # print "%s payload:\n>>%s<<" % (origin,p,)
@@ -1698,7 +1698,8 @@ class Repeater:
 
             else:
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
-                smatch = difflib.SequenceMatcher(None, d, self.packets[self.total_packet_index],
+                smatch = difflib.SequenceMatcher(None, bytes(d).decode("ascii", errors='ignore'),
+                                                       bytes(self.packets[self.total_packet_index]).decode("ascii", errors='ignore'),
                                                  autojunk=False)
                 qr = smatch.ratio()
                 if qr > 0.05:
