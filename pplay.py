@@ -2434,7 +2434,7 @@ def main():
                         if not host:
                             host = "127.0.0.1"
 
-                    if len(args.remote_ssh) > 0:
+                    if len(host_port) > 1:
                         port = host_port[1]
 
                     print_white("remote location: %s:%s" % (host, port,))
@@ -2465,6 +2465,12 @@ def main():
 
                         if args.key:
                             r.ssl_key = args.key[0]
+
+                        if args.cacert:
+                            r.ssl_ca_cert = args.cacert[0]
+
+                        if args.cakey:
+                            r.ssl_ca_key = args.cakey[0]
 
                         temp_file = tempfile.NamedTemporaryFile(prefix="pplay", suffix="packed")
                         r.export_self(temp_file.name)
@@ -2501,7 +2507,7 @@ def main():
 
                                 paramiko.agent.AgentRequestHandler(chan)
 
-                            cmd = "python -u - "
+                            cmd = "python3 -u - "
                             if have_script:
                                 cmd += "--script +"
 
@@ -2514,7 +2520,8 @@ def main():
                                     continue
 
                                 if arg.startswith("--remote") or arg.startswith("--smcap") or arg.startswith("--pcap") \
-                                        or arg.startswith("--key") or arg.startswith("--cert"):
+                                        or arg.startswith("--key") or arg.startswith("--cert") \
+                                        or arg.startswith("--cakey") or arg.startswith("--cacert"):
                                     filter_next = True
                                     continue
 
@@ -2550,7 +2557,7 @@ def main():
                                 if chan.recv_ready():
                                     d = chan.recv(10240)
                                     if len(d) > 0:
-                                        sys.stdout.write(d)
+                                        sys.stdout.write(bytes(d).decode('utf-8'))
 
                                 r, w, e = select([sys.stdin, ], [], [], 0.1)
                                 if sys.stdin in r:
