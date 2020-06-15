@@ -1450,6 +1450,11 @@ class Repeater:
                 except socket.error as e:
                     print_white_bright(
                         "\nConnection with %s:%s terminated: %s" % (client_address[0], client_address[1], e,))
+
+                    if self.exitoneot:
+                        print_red("Exiting on EOT")
+                        sys.exit(0)
+
                     if self.is_udp:
                         break
 
