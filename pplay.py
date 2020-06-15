@@ -295,15 +295,15 @@ class SxyCA:
                 r[k] = {}
 
         for k in ["ca", "srv", "clt", "prt"]:
-            if "ou" not in r[k]: r[k]["ou"] = pref_choice(ou)
-            if "o" not in r[k]:  r[k]["o"] = pref_choice("Smithproxy Software")
-            if "s" not in r[k]:  r[k]["s"] = pref_choice(s)
-            if "l" not in r[k]:  r[k]["l"] = pref_choice(l)
-            if "c" not in r[k]:  r[k]["c"] = pref_choice("CZ", c)
+            if "ou" not in r[k]: r[k]["ou"] = SxyCA.pref_choice(ou)
+            if "o" not in r[k]:  r[k]["o"] = SxyCA.pref_choice("Smithproxy Software")
+            if "s" not in r[k]:  r[k]["s"] = SxyCA.pref_choice(s)
+            if "l" not in r[k]:  r[k]["l"] = SxyCA.pref_choice(l)
+            if "c" not in r[k]:  r[k]["c"] = SxyCA.pref_choice("CZ", c)
 
-        if "cn" not in r["ca"]:   r["ca"]["cn"] = pref_choice(def_subj_ca, "Smithproxy Root CA")
-        if "cn" not in r["srv"]:  r["srv"]["cn"] = pref_choice(def_subj_srv, "Smithproxy Server Certificate")
-        if "cn" not in r["clt"]:  r["clt"]["cn"] = pref_choice(def_subj_clt, "Smithproxy Client Certificate")
+        if "cn" not in r["ca"]:   r["ca"]["cn"] = SxyCA.pref_choice(def_subj_ca, "Smithproxy Root CA")
+        if "cn" not in r["srv"]:  r["srv"]["cn"] = SxyCA.pref_choice(def_subj_srv, "Smithproxy Server Certificate")
+        if "cn" not in r["clt"]:  r["clt"]["cn"] = SxyCA.pref_choice(def_subj_clt, "Smithproxy Client Certificate")
         if "cn" not in r["prt"]:  r["prt"]["cn"] = "Smithproxy Portal Certificate"
 
         if "settings" not in r["ca"]: r["ca"]["settings"] = {
