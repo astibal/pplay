@@ -8,7 +8,7 @@ with open(path.join(this_directory, 'README.rst')) as fh:
 
 setuptools.setup(
     name='pplay',
-    version='2.0.0-2',
+    version='2.0.0-5',
     scripts=['pplay.py', 'smcap2pcap'],
     author="Ales Stibal",
     author_email="astib@mag0.net",
@@ -24,5 +24,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     include_package_data=True,
-    install_requires=["scapy", "colorama", "paramiko", "requests", "pysocks"]
+    install_requires=["scapy", "colorama", "paramiko", "requests", "pysocks", "cryptography"]
 )
