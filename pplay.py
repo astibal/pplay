@@ -2575,7 +2575,7 @@ def main():
                             # we must shutdown, so remote python knows the script is complete
                             chan.shutdown_write()
 
-                            # print_red("remote-ssh[remote host] stdin flushed")
+                            print_red("--- REMOTE OUTPUT START ---")
 
                             while not chan.exit_status_ready():
                                 time.sleep(0.1)
@@ -2593,16 +2593,18 @@ def main():
                                     stdin.write(cmd)
 
                         except paramiko.AuthenticationException as e:
-                            print_red_bright("authentication failed")
+                            print_red_bright("remote-ssh[local]: authentication failed")
 
                         except paramiko.SSHException as e:
-                            print_red_bright("ssh protocol error")
+                            print_red_bright("remote-ssh[local]: ssh protocol error")
 
                         except KeyboardInterrupt as e:
-                            print_red_bright("Ctrl-C: bailing, terminating remote-ssh.")
+                            print_red_bright("remote-ssh[local]: Ctrl-C: bailing, terminating remote-ssh.")
 
                         finally:
                             client.close()
+
+                        print_red("--- REMOTE OUTPUT END ---")
 
                         sys.exit(0)
                     else:
