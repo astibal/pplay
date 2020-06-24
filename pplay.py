@@ -919,7 +919,7 @@ class Repeater:
 
         fin = fileinput.input(files=[self.fnm, ])
         for line in fin:
-            re_packet_start = re.compile(r'^\+\d+: ([^:]+):([^:]+)-([^:]+):([^:(]+)')
+            re_packet_start = re.compile(r'^\+\d+: [a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\([a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\)')
 
             sip = None
             dip = None
