@@ -45,6 +45,7 @@ g_hostname = socket.gethostname()
 try:
     from scapy.all import rdpcap
     from scapy.all import IP
+    from scapy.all import IPv6
     from scapy.all import TCP
     from scapy.all import UDP
     from scapy.all import Padding
@@ -323,7 +324,7 @@ class SxyCA:
             with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "r") as f:
                 r = json.load(f)
                 if SxyCA.Options.debug: print(SxyCA.Options.indent * " " + "load_settings: loaded settings: {}",
-                                                str(r))
+                                              str(r))
 
                 SxyCA.SETTINGS = r
 
@@ -527,10 +528,10 @@ class SxyCA:
 
                     if isca and not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
                         if SxyCA.Options.debug:
-                            print((SxyCA.Options.indent+2)*" " + "           CA not allowed but overridden")
+                            print((SxyCA.Options.indent + 2) * " " + "           CA not allowed but overridden")
                     elif not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
                         if SxyCA.Options.debug:
-                            print((SxyCA.Options.indent+2)*" " + "           CA not allowed by rule")
+                            print((SxyCA.Options.indent + 2) * " " + "           CA not allowed by rule")
                         continue
                     else:
                         if SxyCA.Options.debug: print(
@@ -672,23 +673,32 @@ class Repeater:
             except IOError as e:
                 print("error deploying temporary files: " + str(e))
 
-    def list_pcap(self, verbose=False):
+    def list_pcap(self, verbose=False, do_print=True):
 
         flows = {}
         ident = {}
         frame = -1
+        first_ip_flow = None
 
         if verbose:
             print_yellow("# >>> Flow list:")
 
-        s = rdpcap(self.fnm)
-        for i in s:
+        packets = rdpcap(self.fnm)
+        for packet in packets:
 
             frame += 1
 
+            if packet.haslayer(IP):
+                l3_layer = IP
+            elif packet.haslayer(IPv6):
+                l3_layer = IPv6
+            else:
+                continue
+
             try:
-                sip = i[IP].src
-                dip = i[IP].dst
+                sip = packet[l3_layer].src
+                dip = packet[l3_layer].dst
+
             except IndexError as e:
                 # not even IP packet
                 continue
@@ -700,16 +710,16 @@ class Repeater:
 
             # TCP
             try:
-                sport = str(i[TCP].sport)
-                dport = str(i[TCP].dport)
+                sport = str(packet[TCP].sport)
+                dport = str(packet[TCP].dport)
             except IndexError as e:
                 proto = "UDP"
 
             # UDP
             if proto == "UDP":
                 try:
-                    sport = str(i[UDP].sport)
-                    dport = str(i[UDP].dport)
+                    sport = str(packet[UDP].sport)
+                    dport = str(packet[UDP].dport)
                 except IndexError as e:
                     proto = "Unknown"
 
@@ -717,13 +727,19 @@ class Repeater:
             if proto == "Unknown":
                 continue
 
+            # set a hint of the initial connection
+            if not first_ip_flow:
+                first_ip_flow = sip + ":" + sport
+
             key = proto + " / " + sip + ":" + sport + " -> " + dip + ":" + dport
             ident1 = sip + ":" + sport
             ident2 = dip + ":" + dport
 
             if key not in flows:
                 if verbose:
-                    print_yellow("%s (starting at frame %d)" % (key, frame))
+                    if do_print:
+                        print_yellow("%s (starting at frame %d)" % (key, frame))
+
                 flows[key] = (ident1, ident2)
 
                 if ident1 not in ident.keys():
@@ -734,51 +750,71 @@ class Repeater:
                 ident[ident1].append(key)
                 ident[ident2].append(key)
 
-        print_yellow("\n# >>> Usable connection IDs:")
-        if verbose:
-            print_white("   Yellow - probably services")
-            print_white("   Green  - clients\n")
+        if do_print:
+            print_yellow("\n# >>> Usable connection IDs:\n")
+            if verbose:
+                print_white("   Yellow - probably services")
+                print_white("   Green  - clients\n")
 
-        print_white("# More than 2 simplex flows:\n"
-                    "#   * source port reuse, or it's service")
-        print_white("#   * can't be used to uniquely dissect data from file.")
+                print_white("# More than 2 simplex flows:\n"
+                            "#   * source port reuse, or it's a service")
+                print_white("#   * can't be used to uniquely dissect data from file.")
+                print_white("--")
+
+        candidate = None
 
         for unique_ident in ident.keys():
 
-            port = unique_ident.split(":")[1]
-            if int(port) < 1024:
-                print_yellow(unique_ident + " # %d simplex flows" % (len(ident[unique_ident]),))
-            else:
-                flow_count = len(ident[unique_ident])
+            port = unique_ident.split(":")[-1]
+            no_simplex_flows = len(ident[unique_ident])
 
-                if flow_count > 2:
+            if no_simplex_flows == 2:
+                if int(port) < 1024:
+                    print_yellow("   " + unique_ident + " # %d simplex flows" % (no_simplex_flows,))
+                else:
+                    # IANA suggests ephemeral port range starting at 49152, but many linuxes start already with 32768
+                    if unique_ident == first_ip_flow and int(port) > 32768:
+                        pref = "* "
+                        print_green(pref + unique_ident)
+                        candidate = unique_ident
+                    else:
+                        print_green(unique_ident)
+            else:
+                if do_print and verbose:
                     # Fore.RED + Style.BRIGHT + what + Style.RESET_ALL
                     print_green(unique_ident + Fore.RED + " # %d simplex flows" % (len(ident[unique_ident]),))
-                else:
-                    print_green(unique_ident)
+
+        if not candidate:
+            print_red("no candidate, select yourself, please.")
+        return candidate
 
     def read_pcap(self, im_ip, im_port):
 
-        s = rdpcap(self.fnm)
+        packets = rdpcap(self.fnm)
 
         # print("Looking for client connection %s:%s" % (im_ip,im_port))
 
-        for i in s:
+        for packet in packets:
+
+            if packet.haslayer(IP):
+                l3_layer = IP
+            elif packet.haslayer(IPv6):
+                l3_layer = IPv6
 
             try:
-                sip = i[IP].src
-                dip = i[IP].dst
+                sip = packet[l3_layer].src
+                dip = packet[l3_layer].dst
                 sport = 0
                 dport = 0
-                proto = i[IP].proto
 
                 # print_white("debug: read_pcap: ip.proto " +  str(i[IP].proto))
-                if i[IP].proto == 6:
-                    sport = str(i[TCP].sport)
-                    dport = str(i[TCP].dport)
-                elif i[IP].proto == 17:
-                    sport = str(i[UDP].sport)
-                    dport = str(i[UDP].dport)
+                if packet[l3_layer].haslayer(TCP):
+                    sport = str(packet[TCP].sport)
+                    dport = str(packet[TCP].dport)
+
+                elif packet[l3_layer].haslayer(UDP):
+                    sport = str(packet[UDP].sport)
+                    dport = str(packet[UDP].dport)
 
             except IndexError as e:
                 # IndexError: Layer [TCP|UDP|IP] not found
@@ -799,10 +835,10 @@ class Repeater:
             if origin:
                 p = ""
 
-                if proto == 6:
-                    p = i[TCP].payload
-                elif proto == 17:
-                    p = i[UDP].payload
+                if packet.haslayer(TCP):
+                    p = packet[TCP].payload
+                elif packet.haslayer(UDP):
+                    p = packet[UDP].payload
                 else:
                     print_red("read_cap: cannot find payload in packet")
                     continue
@@ -919,7 +955,8 @@ class Repeater:
 
         fin = fileinput.input(files=[self.fnm, ])
         for line in fin:
-            re_packet_start = re.compile(r'^\+\d+: [a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\([a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\)')
+            re_packet_start = re.compile(
+                r'^\+\d+: [a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\([a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)-[a-z+]+_([^ ^(]+)(?=:[0-9]+):([0-9]+)\)')
 
             sip = None
             dip = None
@@ -1260,37 +1297,48 @@ class Repeater:
         try:
             self.whoami = "client"
 
-            s = None
-            if self.is_udp:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            else:
-                if option_socks:
-                    # print_red_bright("SOCKS socket init") # DEBUG
-
-                    s = socks.socksocket()
-                    if len(option_socks) > 1:
-                        s.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
-                    else:
-                        s.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
-                else:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
             ip = self.custom_ip
             port = int(self.server_port)
 
             t = ip.split(":")
             if len(t) > 1:
-                ip = t[0]
-                port = int(t[1])
+                ip, port, im_ver = address_pair(ip)
+                port = int(port)
+            else:
+                port = int(ip)
+                ip = "localhost"
+                im_ver = 4
 
             if port == 0:
                 port = int(self.server_port)
 
             self.target = (ip, port)
-
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip, port))
 
-            self.sock = s
+
+            new_socket = None
+            if self.is_udp:
+                if im_ver == 6:
+                    new_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+                else:
+                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            else:
+                if option_socks:
+                    # print_red_bright("SOCKS socket init") # DEBUG
+
+                    new_socket = socks.socksocket()
+                    if len(option_socks) > 1:
+                        new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
+                    else:
+                        new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
+                else:
+                    if im_ver == 6:
+                        print("creating IPv6 stream socket")
+                        new_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    else:
+                        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            self.sock = new_socket
 
             try:
                 if self.custom_sport:
@@ -1382,15 +1430,16 @@ class Repeater:
         orig_use_ssl = self.use_ssl
 
         try:
-            ip = "0.0.0.0"
+            ip = "::"
             port = int(self.server_port)
+            im_ver = 6
 
             if self.custom_ip:
 
                 t = self.custom_ip.split(":")
                 if len(t) > 1:
-                    ip = t[0]
-                    port = int(t[1])
+                    ip, port, im_ver = address_pair(self.custom_ip)
+                    port = int(port)
 
                 elif len(t) == 1:
                     # assume it's port
@@ -1403,16 +1452,24 @@ class Repeater:
                 # print("custom IP:PORT %s:%s" % (ip,port) )
 
             self.whoami = "server"
-            print_white_bright("IMPERSONATING SERVER, listening on %s:%s" % (ip, port,))
+
+            print_ip = ip
+            if im_ver == 6:
+                print_ip = "[" + print_ip + "]"
+            print_white_bright("IMPERSONATING SERVER, listening on %s:%s" % (print_ip, port,))
 
             server_address = (ip, int(port))
 
             if self.is_udp:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                if im_ver == 4:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                else:
+                    s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
             else:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            # s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                if im_ver == 4:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                else:
+                    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
 
             if not self.is_udp:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -2049,6 +2106,33 @@ class Repeater:
         print_yellow_bright("#    N  - prepare brand new data. Multiline, empty line commits. ")
 
 
+# get string and digest ip and port part for IPv4 and IPv6
+def address_pair(ip_port_str):
+    col_pos = -1
+    last_bracket_pos = -1
+    idx = 0
+    count = 0
+    address_version = 4
+
+    for c in ip_port_str:
+        if c == ":":
+            col_pos = idx
+            count = count + 1
+        elif c == "]":
+            last_bracket_pos = idx
+        idx = idx + 1
+
+    im_ip = ip_port_str[0:col_pos]
+    im_port = ip_port_str[col_pos + 1:]
+    if count > 1:
+        address_version = 6
+
+    if len(im_ip) > 1:
+        if im_ip[0] == "[" and im_ip[-1] == "]":
+            im_ip = im_ip[1:-1]
+
+    return im_ip, im_port, address_version
+
 def main():
     global option_auto_send, g_script_module, have_colorama, option_socks
 
@@ -2364,17 +2448,27 @@ def main():
             sys.exit(-2)
 
     if args.export or args.pack or args.client or args.server:
-        if args.connection:
-            l = args.connection[0].split(":")
-            im_ip = None
-            im_port = None
 
-            if len(l) != 2:
-                print_red_bright("error: connection syntax!")
+        # attempt
+        if args.pcap and not args.connection:
+            candidate = r.list_pcap(False, do_print=False)
+            if not candidate:
+                print_white_bright("--connection argument has to be set with your data (cannot guess first usable flow)")
                 sys.exit(-1)
+            else:
+                print_green_bright("first usable connection selected: " + candidate)
+                args.connection = [candidate, ]
 
-            im_ip = l[0]
-            im_port = l[1]
+        if args.connection:
+
+            # find port separator, last :
+            # Note: split cannot be used, since we have concatenated IPv6 notation which would break
+            # by splitting by ":" and joining back
+
+            im_ip, im_port, im_ver = address_pair(args.connection[0])
+
+            if args.verbose:
+                print("Using connection: " + im_ip + ":" + im_port + " : version " + str(im_ver))
 
             if args.smcap:
                 r.read_smcap(im_ip, im_port)
@@ -2397,11 +2491,6 @@ def main():
                 im_ip = ip_port[0]
                 im_port = ip_port[1]
                 r.read_smcap(im_ip, im_port)
-
-        # we have to have data available, unless controlled by script
-        elif not (args.script or args.export):
-            print_white_bright("--connection argument has to be set for this option")
-            sys.exit(-1)
 
         # cannot collide with script - those are in the exclusive argparse group
         if args.export:
