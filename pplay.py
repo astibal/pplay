@@ -30,7 +30,7 @@ option_auto_send = 5
 
 option_socks = None
 
-pplay_version = "2.0.0"
+pplay_version = "2.0.1"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -116,6 +116,15 @@ try:
     have_sctp = True
 except ImportError as e:
     print('== no sctp support', file=sys.stderr)
+
+
+def help_sctp():
+    print()
+    print_white_bright("To install support for SCTP:")
+    print("   $ apt install libsctp-dev libsctp1 lksctp-tools")
+    print("   $ pip3 install pysctp3")
+    print()
+
 
 
 def str_time():
@@ -1358,7 +1367,11 @@ class Repeater:
                 port = int(self.server_port)
 
             self.target = (ip, port)
-            print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (ip, port))
+
+            print_ip = ip
+            if im_ver == 6:
+                print_ip = "[" + print_ip + "]"
+            print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (print_ip, port,))
 
 
             new_socket = None
@@ -2305,12 +2318,20 @@ def main():
         rem_ssh.add_argument('--remote-ssh-password', nargs=1,
                              help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
+
     if have_sctp:
         prot_sctp = parser.add_argument_group("SCTP options")
-        prot_sctp.add_argument("--sctp", required=False, action='store_true', help="Enable SCTP")
+        prot_sctp.add_argument("--sctp", required=False, action='store_true', help="Enable SCTP. Ccombine with --udp for datagram service, or --ssl for TLS over SCTP")
+    else:
+        prot_sctp = parser.add_argument_group("SCTP options (support not found)")
+        prot_sctp.add_argument("--help-sctp", required=False, action='store_true', help="how to get sctp support")
 
 
     args = parser.parse_args(sys.argv[1:])
+
+    if not have_sctp and args.help_sctp:
+        help_sctp()
+        exit(1)
 
     try:
         if __pplay_packed_source__:
@@ -2383,6 +2404,10 @@ def main():
         print_red("remote SSH support   : %d" % have_paramiko)
         print_red("remote files support : %d" % have_requests)
         print_red("Socks support        : %d" % have_socks)
+        if have_sctp:
+            print_red("SCTP support         : %d" % have_sctp)
+        else:
+            print_red("SCTP support         : %d (check --help-sctp)" % have_sctp)
 
         if have_ssl:
             print("")
