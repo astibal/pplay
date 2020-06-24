@@ -22,6 +22,7 @@ have_ssl = False
 have_requests = False
 have_socks = False
 have_crypto = False
+have_sctp = False
 
 option_dump_received_correct = False
 option_dump_received_different = True
@@ -109,6 +110,12 @@ try:
 except ImportError as e:
     print('== no cryptography library support, can\'t use CA to sign dynamic certificates based on SNI!',
           file=sys.stderr)
+
+try:
+    import sctp
+    have_sctp = True
+except ImportError as e:
+    print('== no sctp support', file=sys.stderr)
 
 
 def str_time():
@@ -619,6 +626,7 @@ class Repeater:
         self.omexit = False
 
         self.is_udp = False
+        self.is_sctp = False
 
         # our peer (ip,port)
         self.target = (0, 0)
@@ -1287,6 +1295,43 @@ class Repeater:
         else:
             return s
 
+    def create_socket(self, is_client, proto_ver=4):
+        global option_socks, g_script_module
+
+        if self.is_udp:
+            if proto_ver == 6:
+                if self.is_sctp and have_sctp:
+                    new_socket = sctp.sctpsocket_udp(socket.AF_INET6)
+                else:
+                    new_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            else:
+                if self.is_sctp and have_sctp:
+                    new_socket = sctp.sctpsocket_udp(socket.AF_INET)
+                else:
+                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        else:
+            if is_client and option_socks:
+                # print_red_bright("SOCKS socket init") # DEBUG
+
+                new_socket = socks.socksocket()
+                if len(option_socks) > 1:
+                    new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
+                else:
+                    new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
+            else:
+                if proto_ver == 6:
+                    if self.is_sctp and have_sctp:
+                        new_socket = sctp.sctpsocket_tcp(socket.AF_INET6)
+                    else:
+                        new_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                else:
+                    if self.is_sctp and have_sctp:
+                        new_socket = sctp.sctpsocket_tcp(socket.AF_INET)
+                    else:
+                        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        return new_socket
+
     def impersonate_client(self):
         global option_socks, g_script_module
 
@@ -1317,28 +1362,8 @@ class Repeater:
 
 
             new_socket = None
-            if self.is_udp:
-                if im_ver == 6:
-                    new_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-                else:
-                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            else:
-                if option_socks:
-                    # print_red_bright("SOCKS socket init") # DEBUG
 
-                    new_socket = socks.socksocket()
-                    if len(option_socks) > 1:
-                        new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
-                    else:
-                        new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
-                else:
-                    if im_ver == 6:
-                        print("creating IPv6 stream socket")
-                        new_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                    else:
-                        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            self.sock = new_socket
+            self.sock = self.create_socket(True, im_ver)
 
             try:
                 if self.custom_sport:
@@ -1460,16 +1485,7 @@ class Repeater:
 
             server_address = (ip, int(port))
 
-            if self.is_udp:
-                if im_ver == 4:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                else:
-                    s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-            else:
-                if im_ver == 4:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                else:
-                    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            s = self.create_socket(False, im_ver)
 
             if not self.is_udp:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1544,6 +1560,17 @@ class Repeater:
             print_white_bright("Server error: %s" % (e,))
             sys.exit(16)
 
+    def recv(self, pending):
+        if self.is_sctp and not self.use_ssl:
+            xp = pending
+            if pending == 0:
+                xp = 20*1024
+            fromaddr, flags, msg, notif = self.sock.sctp_recv(xp)
+
+            return msg
+        else:
+            return self.sock.recv(pending)
+
     def read(self, blocking=True):
 
         # print_red_bright("DEBUG: read(): blocking %d" % blocking)
@@ -1559,7 +1586,8 @@ class Repeater:
                     if pen == 0:
                         pen = 10240
 
-                    data = self.sock.recv(pen)
+                    data = self.recv(pen)
+
                 except ssl.SSLError as e:
                     # print_red_bright("DEBUG: read(): ssl error")
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
@@ -1573,7 +1601,7 @@ class Repeater:
 
                 data_left = self.sock.pending()
                 while data_left:
-                    data += self.sock.recv(data_left)
+                    data += self.recv(data_left)
                     data_left = self.sock.pending()
                 break
 
@@ -1584,12 +1612,25 @@ class Repeater:
             self.tstamp_last_read = time.time()
             if not self.is_udp:
                 self.sock.setblocking(True)
-                return self.sock.recv(24096)
+                return self.recv(24096)
             else:
                 data, client_address = self.sock.recvfrom(24096)
                 self.target = client_address
                 self.sock.setblocking(True)
                 return data
+
+    def send(self, what):
+        if self.is_sctp and not self.use_ssl:
+            return self.sock.sctp_send(what)
+        else:
+            return self.sock.send(what)
+
+    def sendto(self, what, whom):
+        if self.is_sctp:
+            return self.sock.sctp_send(what)
+        else:
+            return self.sock.sendto(what, whom)
+
 
     def write(self, data):
 
@@ -1602,7 +1643,8 @@ class Repeater:
         if have_ssl and self.use_ssl:
             self.tstamp_last_write = time.time()
             while l < ll:
-                r = self.sock.send(data[l:])
+
+                r = self.send(data[l:])
                 l += r
 
                 # print warning
@@ -1615,7 +1657,7 @@ class Repeater:
             self.tstamp_last_write = time.time()
             if not self.is_udp:
                 while l < ll:
-                    r = self.sock.send(data[l:])
+                    r = self.send(data[l:])
                     l += r
 
                     if r != ll:
@@ -1624,7 +1666,7 @@ class Repeater:
                 return l
 
             else:
-                return self.sock.sendto(data, self.target)
+                return self.sendto(data, self.target)
 
     def load_to_send(self, role, role_index):
         who = self
@@ -2263,6 +2305,11 @@ def main():
         rem_ssh.add_argument('--remote-ssh-password', nargs=1,
                              help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
+    if have_sctp:
+        prot_sctp = parser.add_argument_group("SCTP options")
+        prot_sctp.add_argument("--sctp", required=False, action='store_true', help="Enable SCTP")
+
+
     args = parser.parse_args(sys.argv[1:])
 
     try:
@@ -2350,6 +2397,9 @@ def main():
 
         if args.udp:
             r.is_udp = True
+
+        if args.sctp:
+            r.is_sctp = True
 
         if args.ssl:
             if args.udp:
