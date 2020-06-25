@@ -664,6 +664,13 @@ class Repeater:
             self.nostdin = True
 
 
+    def reset(self):
+        self.to_send = ''
+        self.packet_index = 0
+        self.total_packet_index = 0
+        self.read_packet_counter = 0
+
+
     # write @txt to temp file and return its full path
     def deploy_tmp_file(self, text):
         h, fnm = tempfile.mkstemp()
@@ -1517,6 +1524,28 @@ class Repeater:
             print_red("fallback to pre-set certificate")
             raise e
 
+    def accept(self, s):
+        conn, client_address = None, ["", ""]
+
+        if not self.is_udp:
+            while True:
+                readable, writable, errored = select([s, ], [], [], 0.25)
+                if s in readable:
+                    break
+                else:
+                    # timeout
+                    if self.detect_parent_death():
+                        self.on_parent_death()
+
+            conn, client_address = s.accept()
+            self.target = client_address
+            print_white_bright("accepted client from %s:%s" % (client_address[0], client_address[1]))
+        else:
+            conn = s
+            client_address = ["", ""]
+
+        return conn, client_address
+
     def impersonate_server(self):
         global g_script_module
 
@@ -1565,27 +1594,10 @@ class Repeater:
 
             self.ctrc_count = 0
             while True:
+                self.reset()
                 print_white("waiting for new connection...")
 
-                conn = None
-                client_address = ["", ""]
-
-                if not self.is_udp:
-                    while True:
-                        readable, writable, errored = select([s, ], [], [], 0.25)
-                        if s in readable:
-                            break
-                        else:
-                            # timeout
-                            if self.detect_parent_death():
-                                self.on_parent_death()
-
-                    conn, client_address = s.accept()
-                    self.target = client_address
-                    print_white_bright("accepted client from %s:%s" % (client_address[0], client_address[1]))
-                else:
-                    conn = s
-                    client_address = ["", ""]
+                conn,  client_address = self.accept(s)
 
                 # flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -1608,7 +1620,11 @@ class Repeater:
 
                     print_white_bright(
                         "\nCtrl-C: hit in client loop, exiting to accept loop. Hit Ctrl-C again to terminate.")
-                    self.sock.close()
+
+                    # we don't accept new sockets, therefore we can't close this one!
+                    if not self.is_udp:
+                        self.sock.close()
+
                 except socket.error as e:
                     print_white_bright(
                         "\nConnection with %s:%s terminated: %s" % (client_address[0], client_address[1], e,))
@@ -1619,12 +1635,6 @@ class Repeater:
 
                     if self.is_udp:
                         break
-
-                # reset it in both cases when Ctrl-C received, or connection was closed
-                self.packet_index = 0
-                self.total_packet_index = 0
-
-            # print_white("debug: end of loop.")
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
