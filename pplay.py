@@ -12,6 +12,8 @@ import binascii
 import datetime
 import tempfile
 import json
+import hashlib
+import struct
 
 from select import select
 
@@ -588,6 +590,114 @@ class SxyCA:
             return x509.load_pem_x509_certificate(ff.encode('ascii'), backend=default_backend())
 
 
+# BytesGenerator is convenient, deterministic bytes generator, which expands data
+#   based on its previous state
+#   given the same @magic and same sequence of rand_* requests, it will produce always
+#   the same data.
+class BytesGenerator:
+    def __init__(self, magic, use_hash):
+        self.magic = magic
+        self.hash = use_hash
+        use_hash.update(self.magic.encode('ascii'))
+        self.state = use_hash.digest()
+
+        rep = 0
+        for i in self.state:
+            rep += int(i)
+
+        #self._strengthen(rep)
+
+        self.pool = b''
+        # update with one bock
+        self._get_bytes(1)
+
+    def _roll(self):
+        self.hash.update(self.state)
+        self.state = self.hash.digest()
+
+    def _strengthen(self, times):
+        rep = 0
+        while rep < times:
+            rep += 1
+            self._roll()
+
+    def _get_bytes(self, min_sz):
+
+        while len(self.pool) < min_sz:
+            self._roll()
+            self.pool += self.state
+
+    def rand_bytes(self, sz):
+        self._get_bytes(sz)
+        ret = self.pool[0:sz]
+        self.pool = self.pool[sz:]
+
+        return ret
+
+    def rand_int(self):
+        return struct.unpack('l', self.rand_bytes(8))[0]
+
+    def rand_uint(self):
+        return struct.unpack('L', self.rand_bytes(8))[0]
+
+    def rand_choice(self, lst):
+        return lst[self.rand_uint() % len(lst)]
+
+    @staticmethod
+    def _fillchart(beg, end, base=None):
+        x = ord(beg)
+        chart = [chr(x), ]
+        while x <= ord(end):
+            chart.append(chr(x))
+            x += 1
+
+        if base:
+            return base + chart
+
+        return chart
+
+    def rand_str(self, sz, low_cap=True, high_cap=True, nums=True, space=False, include_list=None, exclude_list=None):
+        ch = []
+        if low_cap:
+            ch = BytesGenerator._fillchart('a', 'z')
+        if high_cap:
+            ch = BytesGenerator._fillchart('A', 'Z', ch)
+        if nums:
+            ch = BytesGenerator._fillchart('0', '9', ch)
+        if space:
+            ch.append(' ')
+
+        if include_list:
+            ch += include_list
+
+        if exclude_list:
+            for ex in exclude_list:
+                try:
+                    ch.remove(ex)
+                except ValueError as e:
+                    pass
+
+        ret = ''
+        for i in range(0, sz):
+            ret += ch[self.rand_uint() % len(ch)]
+
+        return ret
+
+    def rand_range(self, a, b):
+        r = range(a, b)
+        return r[self.rand_uint() % len(r)]
+
+    def taint_str(self, orig, ceil=127, **kwargs):
+        mask = self.rand_bytes(len(orig))
+        ret = ''
+        for i in range(0, len(orig)):
+            if mask[i] > ceil:
+                ret += self.rand_str(1, **kwargs)
+            else:
+                ret += orig[i]
+
+        return ret
+
 class Repeater:
 
     def __init__(self, fnm, server_ip, custom_sport=None):
@@ -850,6 +960,25 @@ class Repeater:
 
         self.packets.append(bytes(data_chunk))
         self.origins[origin].append(current_index)
+
+    def list_gencap(self, to_print=True):
+        gen = BytesGenerator(self.fnm, hashlib.sha256())
+        no_packets = gen.rand_range(2, 25)
+
+        desc = "Generated flow size %d: " % no_packets
+
+        for i in range(0, no_packets):
+            data = gen.rand_bytes(gen.rand_range(10, 1320))
+            origin = gen.rand_choice(["client", "server"])
+            self.append_to_packets(origin, data)
+            desc += origin + ":" + str(len(data)) + "B "
+
+        if to_print:
+            print_green(desc)
+
+    def read_gencap(self, im_ip, im_port):
+        print_yellow("generating using magic: " + self.fnm)
+        self.list_gencap(to_print=False)
 
     def read_pcap(self, im_ip, im_port):
 
@@ -2314,6 +2443,7 @@ def main():
                             help='pcap where the traffic should be read (retransmissions not checked)')
 
     group1.add_argument('--smcap', nargs=1, help='textual capture taken by smithproxy')
+    group1.add_argument('--gencap', nargs=1, help='generate connection data based on passed argument string')
 
     script_grp = group1.add_argument_group("Scripting options")
     script_grp.add_argument('--script', nargs=1,
@@ -2468,7 +2598,7 @@ def main():
         sys.exit(1)
 
     r = None
-    if (Features.have_scapy and args.pcap) or args.smcap:
+    if (Features.have_scapy and args.pcap) or args.smcap or args.gencap:
 
         fnm = ""
         is_local = False
@@ -2477,6 +2607,8 @@ def main():
             fnm = args.pcap[0]
         elif args.smcap:
             fnm = args.smcap[0]
+        elif args.gencap:
+            fnm = args.gencap[0]
         else:
             print_red_bright("it should not end up this way :/")
             sys.exit(255)
@@ -2491,7 +2623,7 @@ def main():
             is_local = True
 
         if fnm:
-            if not os.path.isfile(fnm):
+            if not os.path.isfile(fnm) and not args.gencap:
                 print_red_bright("local file doesn't exist: " + fnm)
                 sys.exit(3)
 
@@ -2570,6 +2702,8 @@ def main():
             r.list_smcap()
         elif Features.have_scapy and args.pcap:
             r.list_pcap(args.verbose)
+        elif args.gencap:
+            r.list_gencap()
 
         sys.exit(0)
 
@@ -2631,6 +2765,9 @@ def main():
                 print_green_bright("first usable connection selected: " + candidate)
                 args.connection = [candidate, ]
 
+        if args.gencap:
+            args.connection = ["autogenerated", ]
+
         if args.connection:
 
             # find port separator, last :
@@ -2646,6 +2783,8 @@ def main():
                 r.read_smcap(im_ip, im_port)
             elif Features.have_scapy and args.pcap:
                 r.read_pcap(im_ip, im_port)
+            elif args.gencap:
+                r.read_gencap(im_ip, im_port)
 
             if args.tcp:
                 r.is_udp = False
