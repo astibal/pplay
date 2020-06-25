@@ -1901,6 +1901,7 @@ class Repeater:
                 print_red_bright("# ... %s: received %dB OK%s" % (str_time(), len(d), scripter_flag))
 
             else:
+                self.total_packet_index += 1
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
                 different = True
 
@@ -1911,9 +1912,7 @@ class Repeater:
                                                      autojunk=False)
                     qr = smatch.ratio()
                     if qr > 0.05:
-                        print_red_bright(
-                            "# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
-                        self.total_packet_index += 1
+                        print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
                     else:
                         print_red_bright("# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
                 else:
@@ -1938,9 +1937,16 @@ class Repeater:
                     print_red(hexdump(d))
                     print_red_bright("#<--")
 
-            if different and self.exitondiff:
-                print_red_bright("\n>>> Different data received, exiting.\n")
-                sys.exit(2)
+            if different:
+
+                if Features.verbose:
+                    print_yellow_bright("# !!! Expected data:")
+                    # index-1, because we incremented it already
+                    print_yellow(hexdump(self.packets[self.total_packet_index-1]))
+
+                if self.exitondiff:
+                    print_red_bright("\n>>> Different data received, exiting.\n")
+                    sys.exit(2)
 
         # this block means there is nothing to send/receive
         else:
