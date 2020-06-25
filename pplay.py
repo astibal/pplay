@@ -19,10 +19,12 @@ have_scapy = False
 have_paramiko = False
 have_colorama = False
 have_ssl = False
+have_tls13 = False
 have_requests = False
 have_socks = False
 have_crypto = False
 have_sctp = False
+host_platform = None
 
 option_dump_received_correct = False
 option_dump_received_different = True
@@ -116,6 +118,13 @@ try:
     have_sctp = True
 except ImportError as e:
     print('== no sctp support', file=sys.stderr)
+
+try:
+    import platform
+    host_platform = platform.system()
+except ImportError as e:
+    print('== cannot detect your OS', file=sys.stderr)
+
 
 
 def help_sctp():
@@ -299,6 +308,15 @@ class SxyCA:
     @staticmethod
     def init_settings(cn, c, ou=None, o=None, l=None, s=None, def_subj_ca=None, def_subj_srv=None, def_subj_clt=None):
 
+        SxyCA.NameOIDMap = {
+            "cn": NameOID.COMMON_NAME,
+            "ou": NameOID.ORGANIZATIONAL_UNIT_NAME,
+            "o": NameOID.ORGANIZATION_NAME,
+            "l": NameOID.LOCALITY_NAME,
+            "s": NameOID.STATE_OR_PROVINCE_NAME,
+            "c": NameOID.COUNTRY_NAME
+        }
+
         # we want to extend, but not overwrite already existing settings
         SxyCA.load_settings()
 
@@ -357,7 +375,7 @@ class SxyCA:
             return serialization.load_pem_private_key(key_file.read(), password=pwd, backend=default_backend())
 
     @staticmethod
-    def generate_ec_key(curve=ec.SECP256R1):
+    def generate_ec_key(curve):
         return ec.generate_private_key(curve=curve, backend=default_backend())
 
     @staticmethod
@@ -378,15 +396,6 @@ class SxyCA:
 
         except Exception as e:
             print(SxyCA.Options.indent * " " + "save_key: exception caught: " + str(e))
-
-    NameOIDMap = {
-        "cn": NameOID.COMMON_NAME,
-        "ou": NameOID.ORGANIZATIONAL_UNIT_NAME,
-        "o": NameOID.ORGANIZATION_NAME,
-        "l": NameOID.LOCALITY_NAME,
-        "s": NameOID.STATE_OR_PROVINCE_NAME,
-        "c": NameOID.COUNTRY_NAME
-    }
 
     @staticmethod
     def construct_sn(profile, sn_override=None):
@@ -642,6 +651,10 @@ class Repeater:
 
         # countdown timer for sending
         self.send_countdown = 0
+
+        if host_platform and host_platform.startswith("Windows"):
+            self.nostdin = True
+
 
     # write @txt to temp file and return its full path
     def deploy_tmp_file(self, text):
@@ -1359,9 +1372,12 @@ class Repeater:
                 ip, port, im_ver = address_pair(ip)
                 port = int(port)
             else:
-                port = int(ip)
-                ip = "localhost"
                 im_ver = 4
+                try:
+                    port = int(ip)
+                    ip = "localhost"
+                except ValueError:
+                    print_red("using original destination port from sample data")
 
             if port == 0:
                 port = int(self.server_port)
@@ -1729,6 +1745,7 @@ class Repeater:
         sys.exit(-2)
 
     def select_wrapper(self, no_writes):
+        global host_platform
 
         inputs = [self.sock, sys.stdin]
         if self.nostdin:
@@ -2188,8 +2205,30 @@ def address_pair(ip_port_str):
 
     return im_ip, im_port, address_version
 
+
+def print_version():
+    print_yellow_bright(title)
+    print_yellow_bright(pplay_copyright)
+    print("")
+    print_red("Colors support       : %d" % have_colorama)
+    print_red("PCAP files support   : %d" % have_scapy)
+    print_red("SSL support          : %d" % have_ssl)
+    print_red("remote SSH support   : %d" % have_paramiko)
+    print_red("remote files support : %d" % have_requests)
+    print_red("Socks support        : %d" % have_socks)
+    if have_sctp:
+        print_red("SCTP support         : %d" % have_sctp)
+    else:
+        print_red("SCTP support         : %d (check --help-sctp)" % have_sctp)
+
+    if have_ssl:
+        print("")
+        print_red("CA signing support   : %d" % have_crypto)
+
 def main():
-    global option_auto_send, g_script_module, have_colorama, option_socks
+    global option_auto_send, g_script_module, option_socks, \
+        have_scapy, have_paramiko, have_colorama, have_ssl, have_tls13, have_requests, have_socks, have_crypto, \
+        have_sctp
 
     parser = argparse.ArgumentParser(
         description=title,
@@ -2268,6 +2307,7 @@ def main():
 
         try:
             if ssl.HAS_TLSv1_3:
+                have_tls13 = True
                 prot.add_argument('--tls1_3', required=False, action='store_true',
                                   help='use tls 1.3')
         except AttributeError:
@@ -2305,7 +2345,7 @@ def main():
     var.add_argument('--exitoneot', required=False, action='store_true',
                      help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
     var.add_argument('--nostdin', required=False, action='store_true',
-                     help='Don\'t read stdin at all. Good for external scripting, applies only with --auto')
+                     help='Don\'t read stdin at all. Good for external scripting. Set automatically on Windows.')
     var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
     var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
 
@@ -2335,7 +2375,7 @@ def main():
 
     try:
         if __pplay_packed_source__:
-            print_red_bright("... using packed parameters")
+            print_red("packed data detected")
             args.script = []
             args.script.append('+')
 
@@ -2349,11 +2389,8 @@ def main():
             have_colorama = False
 
     if args.version:
-        print_white_bright(title)
-        print_white(pplay_copyright)
-        print("", file=sys.stderr)
-        print_white_bright(pplay_version)
-        sys.exit(0)
+        print_version()
+        sys.exit(1)
 
     r = None
     if (have_scapy and args.pcap) or args.smcap:
@@ -2395,23 +2432,7 @@ def main():
         # the same as script, but we won't init repeater
         pass
     else:
-        print_yellow_bright(title)
-        print_yellow_bright(pplay_copyright)
-        print("")
-        print_red("Colors support       : %d" % have_colorama)
-        print_red("PCAP files support   : %d" % have_scapy)
-        print_red("SSL support          : %d" % have_ssl)
-        print_red("remote SSH support   : %d" % have_paramiko)
-        print_red("remote files support : %d" % have_requests)
-        print_red("Socks support        : %d" % have_socks)
-        if have_sctp:
-            print_red("SCTP support         : %d" % have_sctp)
-        else:
-            print_red("SCTP support         : %d (check --help-sctp)" % have_sctp)
-
-        if have_ssl:
-            print("")
-            print_red("CA signing support   : %d" % have_crypto)
+        print_version()
 
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
@@ -2423,7 +2444,7 @@ def main():
         if args.udp:
             r.is_udp = True
 
-        if args.sctp:
+        if have_sctp and args.sctp:
             r.is_sctp = True
 
         if args.ssl:
@@ -2441,7 +2462,7 @@ def main():
             r.sslv = 5
         if args.tls1_2:
             r.sslv = 6
-        if args.tls1_3:
+        if have_tls13 and args.tls1_3:
             r.sslv = 7
 
         if args.cert:
@@ -2462,11 +2483,12 @@ def main():
         if args.ecdh_curve:
             r.ssl_ecdh_curve = args.ecdh_curve[0]
 
-        if args.cacert:
-            r.ssl_ca_cert = args.cacert[0]
+        if have_crypto:
+            if args.cacert:
+                r.ssl_ca_cert = args.cacert[0]
 
-        if args.cakey:
-            r.ssl_ca_key = args.cakey[0]
+            if args.cakey:
+                r.ssl_ca_key = args.cakey[0]
 
     if args.list:
         if args.smcap:
@@ -2525,7 +2547,7 @@ def main():
     if args.export or args.pack or args.client or args.server:
 
         # attempt
-        if args.pcap and not args.connection:
+        if (have_scapy and args.pcap) and not args.connection:
             candidate = r.list_pcap(False, do_print=False)
             if not candidate:
                 print_white_bright("--connection argument has to be set with your data (cannot guess first usable flow)")
@@ -2576,11 +2598,12 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
-            if args.ca_cert:
-                r.ssl_ca_cert = args.cacert[0]
+            if have_crypto:
+                if args.ca_cert:
+                    r.ssl_ca_cert = args.cacert[0]
 
-            if args.ca_key:
-                r.ssl_ca_key = args.cakey[0]
+                if args.ca_key:
+                    r.ssl_ca_key = args.cakey[0]
 
             export_file = args.export[0]
             if r.export_script(export_file):
@@ -2596,11 +2619,12 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
-            if args.cacert:
-                r.ssl_ca_cert = args.cacert[0]
+            if have_crypto:
+                if args.cacert:
+                    r.ssl_ca_cert = args.cacert[0]
 
-            if args.cakey:
-                r.ssl_ca_key = args.cakey[0]
+                if args.cakey:
+                    r.ssl_ca_key = args.cakey[0]
 
             r.export_self(pack_file)
             print_white_bright("Exporting self to file %s" % (pack_file,))
@@ -2654,11 +2678,12 @@ def main():
                         if args.key:
                             r.ssl_key = args.key[0]
 
-                        if args.cacert:
-                            r.ssl_ca_cert = args.cacert[0]
+                        if have_crypto:
+                            if args.cacert:
+                                r.ssl_ca_cert = args.cacert[0]
 
-                        if args.cakey:
-                            r.ssl_ca_key = args.cakey[0]
+                            if args.cakey:
+                                r.ssl_ca_key = args.cakey[0]
 
                         temp_file = tempfile.NamedTemporaryFile(prefix="pplay", suffix="packed")
                         r.export_self(temp_file.name)
@@ -2840,8 +2865,9 @@ def main():
                 r.impersonate('server')
 
     else:
-        print_white_bright(
-            "No-op! You wanted probably to set either --client <target_server_ip> or --server arguments ... Hmm?")
+        print_white_bright("No-op!")
+        print_white("Typically you want to set either --client <ip:port> or --server <[ip:]port>")
+        print_white("\n ... for supported features see --version, for more options see --help")
 
     # parser.print_help()
 
