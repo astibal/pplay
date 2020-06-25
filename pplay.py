@@ -638,6 +638,7 @@ class Repeater:
         self.scripter_args = None
 
         self.exitoneot = False
+        self.exitondiff = False
         self.nostdin = False
         self.nohexdump = False
 
@@ -1840,23 +1841,28 @@ class Repeater:
             if self.scripter:
                 scripter_flag = " (sending to script)"
 
+            different = False
             if d == self.packets[self.total_packet_index]:
                 aligned = True
                 self.total_packet_index += 1
                 print_red_bright("# ... %s: received %dB OK%s" % (str_time(), len(d), scripter_flag))
 
-
             else:
                 print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
-                smatch = difflib.SequenceMatcher(None, bytes(d).decode("ascii", errors='ignore'),
-                                                 bytes(self.packets[self.total_packet_index]).decode("ascii",
-                                                                                                     errors='ignore'),
-                                                 autojunk=False)
-                qr = smatch.ratio()
-                if qr > 0.05:
-                    print_red_bright(
-                        "# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
-                    self.total_packet_index += 1
+                different = True
+
+                if not host_platform or not host_platform.startswith("Windows"):
+                    smatch = difflib.SequenceMatcher(None, bytes(d).decode("ascii", errors='ignore'),
+                                                     bytes(self.packets[self.total_packet_index]).decode("ascii",
+                                                                                                         errors='ignore'),
+                                                     autojunk=False)
+                    qr = smatch.ratio()
+                    if qr > 0.05:
+                        print_red_bright(
+                            "# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
+                        self.total_packet_index += 1
+                    else:
+                        print_red_bright("# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
                 else:
                     print_red_bright("# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
 
@@ -1878,6 +1884,10 @@ class Repeater:
                     print_red_bright("#-->")
                     print_red(hexdump(d))
                     print_red_bright("#<--")
+
+            if different and self.exitondiff:
+                print_red_bright("\n>>> Different data received, exiting.\n")
+                sys.exit(2)
 
         # this block means there is nothing to send/receive
         else:
@@ -2344,6 +2354,10 @@ def main():
     prot.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
     var.add_argument('--exitoneot', required=False, action='store_true',
                      help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
+
+    var.add_argument('--exitondiff', required=False, action='store_true',
+                     help='print error and exit if unexpected data is received')
+
     var.add_argument('--nostdin', required=False, action='store_true',
                      help='Don\'t read stdin at all. Good for external scripting. Set automatically on Windows.')
     var.add_argument('--nohex', required=False, action='store_true', help='Don\'t show hexdumps for data to be sent.')
@@ -2838,6 +2852,12 @@ def main():
             if args.nohex:
                 r.nohexdump = True
 
+            if args.exitoneot:
+                r.exitoneot = True
+
+            if args.exitondiff:
+                r.exitondiff = True
+
             if args.client:
 
                 if args.sport:
@@ -2846,15 +2866,10 @@ def main():
                 if len(args.client) > 0:
                     r.custom_ip = args.client[0]
 
-                if args.exitoneot:
-                    r.exitoneot = True
-
                 r.impersonate('client')
 
             elif args.server:
 
-                if args.exitoneot:
-                    r.exitoneot = True
 
                 if len(args.server) > 0:
                     # arg type is '?' so no list there, just string
