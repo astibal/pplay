@@ -657,6 +657,9 @@ class Repeater:
         # countdown timer for sending
         self.send_countdown = 0
 
+        # ctrl-c counter (needed to break udp loop)
+        self.ctrc_count = 0
+
         if host_platform and host_platform.startswith("Windows"):
             self.nostdin = True
 
@@ -1560,6 +1563,7 @@ class Repeater:
             if not self.is_udp:
                 s.listen(1)
 
+            self.ctrc_count = 0
             while True:
                 print_white("waiting for new connection...")
 
@@ -1598,6 +1602,10 @@ class Repeater:
 
                     self.packet_loop()
                 except KeyboardInterrupt as e:
+                    self.ctrc_count += 1
+                    if self.ctrc_count > 1:
+                        sys.exit(0)
+
                     print_white_bright(
                         "\nCtrl-C: hit in client loop, exiting to accept loop. Hit Ctrl-C again to terminate.")
                     self.sock.close()
@@ -2095,6 +2103,9 @@ class Repeater:
                         sys.exit(0)
 
                     break
+                else:
+                    # on data: reset ctrc_count for connectionless ... connections :-)
+                    self.ctrc_count = 0
 
             if self.sock in w:
                 if not self.write_end:
