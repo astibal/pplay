@@ -51,6 +51,7 @@ try:
     from scapy.all import IPv6
     from scapy.all import TCP
     from scapy.all import UDP
+    from scapy.all import SCTP
     from scapy.all import Padding
 
     have_scapy = True
@@ -129,9 +130,9 @@ except ImportError as e:
 
 def help_sctp():
     print()
-    print_white_bright("To install support for SCTP:")
-    print("   $ apt install libsctp-dev libsctp1 lksctp-tools")
-    print("   $ pip3 install pysctp3")
+    print_white_bright("To install support for SCTP in debian-based linux:")
+    print("   apt install libsctp-dev libsctp1 lksctp-tools")
+    print("   pip3 install pysctp3")
     print()
 
 
@@ -734,25 +735,29 @@ class Repeater:
                 # not even IP packet
                 continue
 
-            proto = "TCP"
-
             sport = ""
             dport = ""
 
             # TCP
-            try:
-                sport = str(packet[TCP].sport)
-                dport = str(packet[TCP].dport)
-            except IndexError as e:
+            if packet[l3_layer].haslayer(TCP):
+                sport = str(packet[l3_layer][TCP].sport)
+                dport = str(packet[l3_layer][TCP].dport)
+                proto = "TCP"
+            elif packet[l3_layer].haslayer(UDP):
+                sport = str(packet[l3_layer][UDP].sport)
+                dport = str(packet[l3_layer][UDP].dport)
                 proto = "UDP"
+            elif packet[l3_layer].haslayer(SCTP):
+                sport = str(packet[l3_layer][SCTP].sport)
+                dport = str(packet[l3_layer][SCTP].dport)
 
-            # UDP
-            if proto == "UDP":
-                try:
-                    sport = str(packet[UDP].sport)
-                    dport = str(packet[UDP].dport)
-                except IndexError as e:
-                    proto = "Unknown"
+                print_white_bright("----")
+                packet[l3_layer][SCTP].show()
+
+                proto = "SCTP"
+            else:
+                proto = "Unknown"
+
 
             # Unknown
             if proto == "Unknown":
@@ -819,6 +824,20 @@ class Repeater:
             print_red("no candidate, select yourself, please.")
         return candidate
 
+    def append_to_packets(self, origin, data_chunk):
+        if isinstance(data_chunk, Padding) or type(data_chunk) == type(Padding):
+            # print("...  padding")
+            return
+        if not data_chunk:
+            # print("...  empty")
+            return
+
+
+        current_index = len(self.packets)
+
+        self.packets.append(bytes(data_chunk))
+        self.origins[origin].append(current_index)
+
     def read_pcap(self, im_ip, im_port):
 
         packets = rdpcap(self.fnm)
@@ -840,12 +859,17 @@ class Repeater:
 
                 # print_white("debug: read_pcap: ip.proto " +  str(i[IP].proto))
                 if packet[l3_layer].haslayer(TCP):
-                    sport = str(packet[TCP].sport)
-                    dport = str(packet[TCP].dport)
+                    sport = str(packet[l3_layer][TCP].sport)
+                    dport = str(packet[l3_layer][TCP].dport)
 
                 elif packet[l3_layer].haslayer(UDP):
-                    sport = str(packet[UDP].sport)
-                    dport = str(packet[UDP].dport)
+                    sport = str(packet[l3_layer][UDP].sport)
+                    dport = str(packet[l3_layer][UDP].dport)
+
+                elif packet[l3_layer].haslayer(SCTP):
+                    sport = str(packet[l3_layer][SCTP].sport)
+                    dport = str(packet[l3_layer][SCTP].dport)
+
 
             except IndexError as e:
                 # IndexError: Layer [TCP|UDP|IP] not found
@@ -864,31 +888,39 @@ class Repeater:
                 origin = "server"
 
             if origin:
-                p = ""
+                extracted_payload = []
 
                 if packet.haslayer(TCP):
-                    p = packet[TCP].payload
+                    extracted_payload.append(packet[TCP].payload)
                 elif packet.haslayer(UDP):
-                    p = packet[UDP].payload
+                    extracted_payload.append(packet[UDP].payload)
+                elif packet.haslayer(SCTP):
+                    sctp_packet = packet[l3_layer][SCTP]
+
+                    # looking for layer: scapy.layers.sctp.SCTPChunkData
+                    counter = 0
+                    while True:
+                        layer = sctp_packet.getlayer(counter)
+                        if layer is None:
+                            break
+                        else:
+                            if layer.name == "SCTPChunkData":
+                                extracted_payload.append(layer.data)
+                        counter += 1
+
                 else:
-                    print_red("read_cap: cannot find payload in packet")
+                    print_red("read_cap: cannot find any supported payload type in the packet")
                     continue
 
-                if len(p) == 0:
+                if len(extracted_payload) == 0:
                     # print "No payload"
                     continue
 
                 # print("--")
                 # print("Len: %s",help(p))
-                if isinstance(p, Padding) or type(p) == type(Padding):
-                    print("... reached end of tcp, frame contains padding")
-                    continue
-                # print(hexdump(str(p)))
 
-                current_index = len(self.packets)
-
-                self.packets.append(bytes(p))
-                self.origins[origin].append(current_index)
+                for current_dato in extracted_payload:
+                    self.append_to_packets(origin, current_dato)
 
                 # print "%s payload:\n>>%s<<" % (origin,p,)
 
