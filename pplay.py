@@ -15,24 +15,27 @@ import json
 
 from select import select
 
-have_scapy = False
-have_paramiko = False
-have_colorama = False
-have_ssl = False
-have_tls13 = False
-have_requests = False
-have_socks = False
-have_crypto = False
-have_sctp = False
-host_platform = None
 
-option_dump_received_correct = False
-option_dump_received_different = True
-option_auto_send = 5
+class Features:
+    have_scapy = False
+    have_paramiko = False
+    have_colorama = False
+    have_ssl = False
+    have_tls13 = False
+    have_requests = False
+    have_socks = False
+    have_crypto = False
+    have_sctp = False
+    host_platform = None
 
-option_socks = None
+    verbose = False
 
-pplay_version = "2.0.1"
+    option_dump_received_correct = False
+    option_dump_received_different = True
+    option_auto_send = 5
+    option_socks = None
+
+pplay_version = "2.0.3"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -54,7 +57,7 @@ try:
     from scapy.all import SCTP
     from scapy.all import Padding
 
-    have_scapy = True
+    Features.have_scapy = True
 except ImportError as e:
     print('== No scapy, pcap files not supported.', file=sys.stderr)
 
@@ -63,7 +66,7 @@ try:
     import colorama
     from colorama import Fore, Back, Style
 
-    have_colorama = True
+    Features.have_colorama = True
 except ImportError as e:
     print('== No colorama library, enjoy.', file=sys.stderr)
 
@@ -71,7 +74,7 @@ except ImportError as e:
 try:
     import ssl
 
-    have_ssl = True
+    Features.have_ssl = True
 except ImportError as e:
     print('== No SSL python support!', file=sys.stderr)
 
@@ -79,7 +82,7 @@ except ImportError as e:
 try:
     import paramiko
 
-    have_paramiko = True
+    Features.have_paramiko = True
 except ImportError as e:
     print('== No paramiko library, use ssh with pipes!', file=sys.stderr)
 
@@ -87,7 +90,7 @@ except ImportError as e:
 try:
     import requests
 
-    have_requests = True
+    Features.have_requests = True
 except ImportError as e:
     print('== No requests library support, files on http(s) won\'t be accessible!', file=sys.stderr)
 
@@ -95,7 +98,7 @@ except ImportError as e:
 try:
     import socks
 
-    have_socks = True
+    Features.have_socks = True
 except ImportError as e:
     print('== No pysocks library support, can\'t use SOCKS proxy!', file=sys.stderr)
 
@@ -109,14 +112,14 @@ try:
     from cryptography.x509.oid import AuthorityInformationAccessOID
     from cryptography.x509.oid import NameOID
 
-    have_crypto = True
+    Features.have_crypto = True
 except ImportError as e:
     print('== no cryptography library support, can\'t use CA to sign dynamic certificates based on SNI!',
           file=sys.stderr)
 
 try:
     import sctp
-    have_sctp = True
+    Features.have_sctp = True
 except ImportError as e:
     print('== no sctp support', file=sys.stderr)
 
@@ -155,56 +158,56 @@ def str_time():
 
 
 def print_green_bright(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.GREEN + Style.BRIGHT + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_green(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.GREEN + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_yellow_bright(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.YELLOW + Style.BRIGHT + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_yellow(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.YELLOW + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_red_bright(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.RED + Style.BRIGHT + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_red(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.RED + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_white_bright(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.WHITE + Style.BRIGHT + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
 
 def print_white(what):
-    if have_colorama:
+    if Features.have_colorama:
         print(Fore.WHITE + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
@@ -1235,7 +1238,7 @@ class Repeater:
         # else:
         #    print_yellow(out)
 
-        if option_auto_send < 0 or option_auto_send >= 5:
+        if Features.option_auto_send < 0 or Features.option_auto_send >= 5:
 
             out = ''
             out += "#<--\n"
@@ -1254,7 +1257,7 @@ class Repeater:
         # print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
 
     def starttls(self):
-        if have_ssl:
+        if Features.have_ssl:
             self.use_ssl = True
             self.sock = self.prepare_socket(self.sock, self.whoami == 'server')
             self.sock_upgraded = self.sock
@@ -1345,42 +1348,42 @@ class Repeater:
                 return s
 
     def prepare_socket(self, s, server_side=False):
-        if have_ssl and self.use_ssl:
+        if Features.have_ssl and self.use_ssl:
             return self.prepare_ssl_socket(s, server_side)
         else:
             return s
 
     def create_socket(self, is_client, proto_ver=4):
-        global option_socks, g_script_module
+        global g_script_module
 
         if self.is_udp:
             if proto_ver == 6:
-                if self.is_sctp and have_sctp:
+                if self.is_sctp and Features.have_sctp:
                     new_socket = sctp.sctpsocket_udp(socket.AF_INET6)
                 else:
                     new_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
             else:
-                if self.is_sctp and have_sctp:
+                if self.is_sctp and Features.have_sctp:
                     new_socket = sctp.sctpsocket_udp(socket.AF_INET)
                 else:
                     new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         else:
-            if is_client and option_socks:
+            if is_client and Features.option_socks:
                 # print_red_bright("SOCKS socket init") # DEBUG
 
                 new_socket = socks.socksocket()
-                if len(option_socks) > 1:
-                    new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(option_socks[1]))
+                if len(Features.option_socks) > 1:
+                    new_socket.set_proxy(socks.SOCKS5, Features.option_socks[0], int(Features.option_socks[1]))
                 else:
-                    new_socket.set_proxy(socks.SOCKS5, option_socks[0], int(1080))
+                    new_socket.set_proxy(socks.SOCKS5, Features.option_socks[0], int(1080))
             else:
                 if proto_ver == 6:
-                    if self.is_sctp and have_sctp:
+                    if self.is_sctp and Features.have_sctp:
                         new_socket = sctp.sctpsocket_tcp(socket.AF_INET6)
                     else:
                         new_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
                 else:
-                    if self.is_sctp and have_sctp:
+                    if self.is_sctp and Features.have_sctp:
                         new_socket = sctp.sctpsocket_tcp(socket.AF_INET)
                     else:
                         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1388,7 +1391,7 @@ class Repeater:
         return new_socket
 
     def impersonate_client(self):
-        global option_socks, g_script_module
+        global g_script_module
 
         if g_script_module and not self.scripter:
             self.scripter = g_script_module.PPlayScript(self, self.scripter_args)
@@ -1463,7 +1466,7 @@ class Repeater:
                 sni = "server.pplay.cloud"
                 print_yellow("using fallback SNI: " + sni)
 
-        if not have_crypto:
+        if not Features.have_crypto:
             # no cryptography ... ok - either we have server cert provided, or we are doomed.
 
             if not self.ssl_cert or not self.ssl_key:
@@ -1637,7 +1640,7 @@ class Repeater:
 
         # print_red_bright("DEBUG: read(): blocking %d" % blocking)
 
-        if have_ssl and self.use_ssl:
+        if Features.have_ssl and self.use_ssl:
             data = ''
 
             self.sock.setblocking(blocking)
@@ -1702,7 +1705,7 @@ class Repeater:
         ll = len(data)
         l = 0
 
-        if have_ssl and self.use_ssl:
+        if Features.have_ssl and self.use_ssl:
             self.tstamp_last_write = time.time()
             while l < ll:
 
@@ -1789,7 +1792,7 @@ class Repeater:
         if no_writes:
             outputs.remove(self.sock)
 
-        if have_ssl and self.use_ssl:
+        if Features.have_ssl and self.use_ssl:
             r = []
             w = []
             e = []
@@ -1862,7 +1865,7 @@ class Repeater:
 
             # if auto is enabled, we will not wait for user input when we received already some packet
             # user had to start pplay on the other side
-            if option_auto_send:
+            if Features.option_auto_send:
                 self.auto_send_now = time.time()
 
             # to print what we got and what we expect
@@ -1907,12 +1910,12 @@ class Repeater:
 
             # this block is printed while in the normal packet loop (there are packets still to receive or send
             if aligned:
-                if option_dump_received_correct:
+                if Features.option_dump_received_correct:
                     print_red_bright("#-->")
                     print_red(hexdump(d))
                     print_red_bright("#<--")
             else:
-                if option_dump_received_different:
+                if Features.option_dump_received_different:
                     print_red_bright("#-->")
                     print_red(hexdump(d))
                     print_red_bright("#<--")
@@ -1923,7 +1926,7 @@ class Repeater:
 
         # this block means there is nothing to send/receive
         else:
-            if option_dump_received_different:
+            if Features.option_dump_received_different:
                 print_red_bright("#-->")
                 print_red(hexdump(d))
                 print_red_bright("#<--")
@@ -1977,14 +1980,14 @@ class Repeater:
                         self.process_command(l.strip(), 'ysclxrihN')
 
                         # in auto mode, reset current state, since we wrote into the socket
-                        if option_auto_send:
+                        if Features.option_auto_send:
                             self.auto_send_now = time.time()
                             return
 
-                # print_white_bright("debug: autosend = " + str(option_auto_send))
+                # print_white_bright("debug: autosend = " + str(Features.option_auto_send))
 
                 # auto_send feature
-                if option_auto_send > 0 and self.send_aligned():
+                if Features.option_auto_send > 0 and self.send_aligned():
 
                     now = time.time()
                     if self._last_countdown_print == 0:
@@ -1994,10 +1997,10 @@ class Repeater:
                     # print out the dot
                     if delta >= 1:
 
-                        self.send_countdown = round(self.auto_send_now + option_auto_send - now)
+                        self.send_countdown = round(self.auto_send_now + Features.option_auto_send - now)
 
                         # print dot only if there some few seconds to indicate
-                        if option_auto_send >= 2:
+                        if Features.option_auto_send >= 2:
                             # print(".",end='',file=sys.stderr)
                             # print(".",end='',file=sys.stdout)
                             if self.send_countdown > 0:
@@ -2006,10 +2009,10 @@ class Repeater:
 
                         self._last_countdown_print = now
 
-                    if now - self.auto_send_now >= option_auto_send:
+                    if now - self.auto_send_now >= Features.option_auto_send:
 
                         # indicate sending only when there are few seconds to indicate
-                        if option_auto_send >= 2:
+                        if Features.option_auto_send >= 2:
                             print_green_bright("  ... sending!")
 
                         been_sent = self.to_send
@@ -2035,7 +2038,6 @@ class Repeater:
                                 pass
 
     def packet_loop(self):
-        global option_auto_send
 
         running = 1
         self.write_end = False
@@ -2058,8 +2060,8 @@ class Repeater:
                     # print_red_bright("DEBUG: exitoneot true")
 
                     if self.whoami == "server":
-                        if option_auto_send >= 0:
-                            time.sleep(option_auto_send)
+                        if Features.option_auto_send >= 0:
+                            time.sleep(Features.option_auto_send)
                         else:
                             time.sleep(0.5)
 
@@ -2147,7 +2149,6 @@ class Repeater:
         return nd
 
     def process_command(self, l, mask):
-        global option_auto_send
 
         # print_yellow_bright("# thank you!")
 
@@ -2202,9 +2203,9 @@ class Repeater:
                     print_yellow_bright("# Custom payload not created")
 
             elif l.startswith('i'):
-                option_auto_send = (-1 * option_auto_send)
-                if option_auto_send > 0:
-                    print_yellow_bright("# Toggle automatic send: enabled, interval %d" % (option_auto_send,))
+                Features.option_auto_send = (-1 * Features.option_auto_send)
+                if Features.option_auto_send > 0:
+                    print_yellow_bright("# Toggle automatic send: enabled, interval %d" % (Features.option_auto_send,))
                 else:
                     print_yellow_bright("# Toggle automatic send: disabled")
 
@@ -2214,7 +2215,7 @@ class Repeater:
     def print_help(self):
         print_yellow_bright("#    More commands:")
         print_yellow_bright(
-            "#    i  - interrupt or continue auto-send feature. Interval=%d." % (abs(option_auto_send),))
+            "#    i  - interrupt or continue auto-send feature. Interval=%d." % (abs(Features.option_auto_send),))
         print_yellow_bright("#    r  - replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
         print_yellow_bright("#       - will try to match on all buffer lines")
         print_yellow_bright("#    N  - prepare brand new data. Multiline, empty line commits. ")
@@ -2252,38 +2253,36 @@ def print_version():
     print_yellow_bright(title)
     print_yellow_bright(pplay_copyright)
     print("")
-    print_red("Colors support       : %d" % have_colorama)
-    print_red("PCAP files support   : %d" % have_scapy)
-    print_red("SSL support          : %d" % have_ssl)
-    print_red("remote SSH support   : %d" % have_paramiko)
-    print_red("remote files support : %d" % have_requests)
-    print_red("Socks support        : %d" % have_socks)
-    if have_sctp:
-        print_red("SCTP support         : %d" % have_sctp)
+    print_red("Colors support       : %d" % Features.have_colorama)
+    print_red("PCAP files support   : %d" % Features.have_scapy)
+    print_red("SSL support          : %d" % Features.have_ssl)
+    print_red("remote SSH support   : %d" % Features.have_paramiko)
+    print_red("remote files support : %d" % Features.have_requests)
+    print_red("Socks support        : %d" % Features.have_socks)
+    if Features.have_sctp:
+        print_red("SCTP support         : %d" % Features.have_sctp)
     else:
-        print_red("SCTP support         : %d (check --help-sctp)" % have_sctp)
+        print_red("SCTP support         : %d (check --help-sctp)" % Features.have_sctp)
 
-    if have_ssl:
+    if Features.have_ssl:
         print("")
-        print_red("CA signing support   : %d" % have_crypto)
+        print_red("CA signing support   : %d" % Features.have_crypto)
 
 def main():
-    global option_auto_send, g_script_module, option_socks, \
-        have_scapy, have_paramiko, have_colorama, have_ssl, have_tls13, have_requests, have_socks, have_crypto, \
-        have_sctp
+    global g_script_module
 
     parser = argparse.ArgumentParser(
         description=title,
         epilog=" - %s " % (pplay_copyright,))
 
     schemes_supported = "file,"
-    if have_requests:
+    if Features.have_requests:
         schemes_supported += "http(s),"
     schemes_supported = schemes_supported[:-1]
 
     ds = parser.add_argument_group("Data Sources [%s]" % (schemes_supported,))
     group1 = ds.add_mutually_exclusive_group()
-    if have_scapy:
+    if Features.have_scapy:
         group1.add_argument('--pcap', nargs=1,
                             help='pcap where the traffic should be read (retransmissions not checked)')
 
@@ -2313,16 +2312,16 @@ def main():
 
     rc = parser.add_argument_group("Remotes")
     rcgroup = rc.add_mutually_exclusive_group()
-    if have_paramiko:
+    if Features.have_paramiko:
         rcgroup.add_argument('--remote-ssh', nargs=1, help=""" Run itself on remote SSH server. 
         Arguments follow this IP:PORT or IP(with 22 as default SSH port) 
         Note: All local files related options are filtered out. 
         Remote server requires only pure python installed, as all smart stuff is done on the originating host.
         """)
-        if have_socks:
-            rcgroup.add_argument('--socks', nargs=1,
-                                 help="""Client will connect via SOCKS proxy. Use IP:PORT, 
-                                 or IP (1080 is default port)""")
+    if Features.have_socks:
+        rcgroup.add_argument('--socks', nargs=1,
+                             help="""Client will connect via SOCKS proxy. Use IP:PORT, 
+                             or IP (1080 is default port)""")
 
     ac_sniff = parser.add_argument_group("Sniffer file filters (mandatory unless --script is used)")
     ac_sniff.add_argument('--connection', nargs=1,
@@ -2330,7 +2329,7 @@ def main():
                                'IMPORTANT: it\'s SOURCE based to match unique flow!')
 
     prot = parser.add_argument_group("Protocol options")
-    if have_ssl:
+    if Features.have_ssl:
         prot.add_argument('--ssl', required=False, action='store_true',
                           help='toggle this flag to wrap payload to SSL (defaults to library ... default)')
 
@@ -2340,7 +2339,7 @@ def main():
                       help='toggle to override L3 protocol from file and send payload in UDP')
     prot.add_argument('--sport', required=False, nargs=1, help='Specify source port')
 
-    if have_ssl:
+    if Features.have_ssl:
         prot.add_argument('--ssl3', required=False, action='store_true',
                           help='ssl3 ... won\'t be supported by library most likely')
         prot.add_argument('--tls1', required=False, action='store_true', help='use tls 1.0')
@@ -2349,20 +2348,20 @@ def main():
 
         try:
             if ssl.HAS_TLSv1_3:
-                have_tls13 = True
+                Features.have_tls13 = True
                 prot.add_argument('--tls1_3', required=False, action='store_true',
                                   help='use tls 1.3')
         except AttributeError:
             pass
 
     prot_ssl = parser.add_argument_group("SSL protocol options")
-    if have_ssl:
+    if Features.have_ssl:
         prot_ssl = parser.add_argument_group("SSL cipher support")
         prot_ssl.add_argument('--cert', required=False, nargs=1, help='certificate (PEM format) for --server mode')
         prot_ssl.add_argument('--key', required=False, nargs=1,
                               help='key of certificate (PEM format) for --server mode')
 
-        if have_crypto:
+        if Features.have_crypto:
             prot_ssl.add_argument('--cakey', required=False, nargs=1, help='use to self-sign server-side '
                                                                            'connections based on received SNI')
             prot_ssl.add_argument('--cacert', required=False, nargs=1, help='signing CA certificate to be used'
@@ -2397,7 +2396,7 @@ def main():
 
     var.add_argument('--verbose', required=False, action='store_true', help='Print out more output.')
 
-    if have_paramiko:
+    if Features.have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
         rem_ssh.add_argument('--remote-ssh-user', nargs=1,
                              help='SSH user. You can use SSH agent, too (so avoiding this option).')
@@ -2405,7 +2404,7 @@ def main():
                              help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
 
-    if have_sctp:
+    if Features.have_sctp:
         prot_sctp = parser.add_argument_group("SCTP options")
         prot_sctp.add_argument("--sctp", required=False, action='store_true', help="Enable SCTP. Ccombine with --udp for datagram service, or --ssl for TLS over SCTP")
     else:
@@ -2415,7 +2414,7 @@ def main():
 
     args = parser.parse_args(sys.argv[1:])
 
-    if not have_sctp and args.help_sctp:
+    if not Features.have_sctp and args.help_sctp:
         help_sctp()
         exit(1)
 
@@ -2428,18 +2427,21 @@ def main():
     except Exception:
         pass
 
-    if have_colorama:
+    if args.verbose:
+        Features.verbose = True
+
+    if Features.have_colorama:
         if not args.nocolor:
             colorama.init(autoreset=False, strip=False)
         else:
-            have_colorama = False
+            Features.have_colorama = False
 
     if args.version:
         print_version()
         sys.exit(1)
 
     r = None
-    if (have_scapy and args.pcap) or args.smcap:
+    if (Features.have_scapy and args.pcap) or args.smcap:
 
         fnm = ""
         is_local = False
@@ -2474,7 +2476,7 @@ def main():
     elif args.script or args.export:
         r = Repeater(None, "")
 
-    elif have_paramiko and args.remote_ssh:
+    elif Features.have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
         pass
     else:
@@ -2490,7 +2492,7 @@ def main():
         if args.udp:
             r.is_udp = True
 
-        if have_sctp and args.sctp:
+        if Features.have_sctp and args.sctp:
             r.is_sctp = True
 
         if args.ssl:
@@ -2508,7 +2510,7 @@ def main():
             r.sslv = 5
         if args.tls1_2:
             r.sslv = 6
-        if have_tls13 and args.tls1_3:
+        if Features.have_tls13 and args.tls1_3:
             r.sslv = 7
 
         if args.cert:
@@ -2529,7 +2531,7 @@ def main():
         if args.ecdh_curve:
             r.ssl_ecdh_curve = args.ecdh_curve[0]
 
-        if have_crypto:
+        if Features.have_crypto:
             if args.cacert:
                 r.ssl_ca_cert = args.cacert[0]
 
@@ -2539,7 +2541,7 @@ def main():
     if args.list:
         if args.smcap:
             r.list_smcap()
-        elif have_scapy and args.pcap:
+        elif Features.have_scapy and args.pcap:
             r.list_pcap(args.verbose)
 
         sys.exit(0)
@@ -2593,7 +2595,7 @@ def main():
     if args.export or args.pack or args.client or args.server:
 
         # attempt
-        if (have_scapy and args.pcap) and not args.connection:
+        if (Features.have_scapy and args.pcap) and not args.connection:
             candidate = r.list_pcap(False, do_print=False)
             if not candidate:
                 print_white_bright("--connection argument has to be set with your data (cannot guess first usable flow)")
@@ -2615,7 +2617,7 @@ def main():
 
             if args.smcap:
                 r.read_smcap(im_ip, im_port)
-            elif have_scapy and args.pcap:
+            elif Features.have_scapy and args.pcap:
                 r.read_pcap(im_ip, im_port)
 
             if args.tcp:
@@ -2644,7 +2646,7 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
-            if have_crypto:
+            if Features.have_crypto:
                 if args.ca_cert:
                     r.ssl_ca_cert = args.cacert[0]
 
@@ -2665,7 +2667,7 @@ def main():
             if args.key:
                 r.ssl_key = args.key[0]
 
-            if have_crypto:
+            if Features.have_crypto:
                 if args.cacert:
                     r.ssl_ca_cert = args.cacert[0]
 
@@ -2679,7 +2681,7 @@ def main():
         # ok regardless data controlled by script or capture file read
         elif args.client or args.server:
 
-            if have_paramiko:
+            if Features.have_paramiko:
                 if args.remote_ssh:
 
                     port = "22"
@@ -2724,7 +2726,7 @@ def main():
                         if args.key:
                             r.ssl_key = args.key[0]
 
-                        if have_crypto:
+                        if Features.have_crypto:
                             if args.cacert:
                                 r.ssl_ca_cert = args.cacert[0]
 
@@ -2845,12 +2847,12 @@ def main():
                     else:
                         print_red_bright("paramiko unavailable or --pack failed")
 
-            if have_socks and args.socks:
+            if Features.have_socks and args.socks:
                 # print_red("Will use SOCKS") # DEBUG
-                option_socks = args.socks[0].split(":")
+                Features.option_socks = args.socks[0].split(":")
 
             if args.ssl:
-                if not have_ssl:
+                if not Features.have_ssl:
                     print_red_bright("error: SSL not available!")
                     sys.exit(-1)
 
@@ -2869,16 +2871,16 @@ def main():
                 r.use_ssl = True
 
             if args.noauto:
-                option_auto_send = -1
+                Features.option_auto_send = -1
             elif args.auto:
-                option_auto_send = args.auto
+                Features.option_auto_send = args.auto
 
                 if args.nostdin:
                     print_red_bright("stdin will be unmonitored")
                     r.nostdin = True
 
             else:
-                # option_auto_send = 5
+                # Features.option_auto_send = 5
                 pass
 
             if args.nohex:
