@@ -698,6 +698,19 @@ class BytesGenerator:
 
         return ret
 
+    def taint_bytes(self, orig, ceil=127, **kwargs):
+        mask = self.rand_bytes(len(orig))
+        ret = bytearray()
+        for i in range(0, len(orig)):
+            if mask[i] > ceil:
+                ret += self.rand_bytes(1)
+            else:
+                a = orig[i]
+                ret.append(a)
+
+        return ret
+
+
 class Repeater:
 
     def __init__(self, fnm, server_ip, custom_sport=None):
