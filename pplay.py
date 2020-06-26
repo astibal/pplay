@@ -215,7 +215,7 @@ def print_white(what):
         print(what, file=sys.stderr)
 
 
-__vis_filter = """................................ !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[.]^_`abcdefghijklmnopqrstuvwxyz{|}~................................................................................................................................."""
+__vis_filter = b"""................................ !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[.]^_`abcdefghijklmnopqrstuvwxyz{|}~................................................................................................................................."""
 
 
 def hexdump(xbuf, length=16):
@@ -223,12 +223,12 @@ def hexdump(xbuf, length=16):
     n = 0
     res = []
 
-    buf = bytes(xbuf).decode('ascii', errors="ignore")
+    buf = bytearray(xbuf)
 
     while buf:
         line, buf = buf[:length], buf[length:]
-        hexa = ' '.join(['%02x' % ord(x) for x in line])
-        line = line.translate(__vis_filter)
+        hexa = ' '.join(['%02x' % x for x in line])
+        line = line.translate(__vis_filter).decode()
         res.append('  %04d:  %-*s %s' % (n, length * 3, hexa, line))
         n += length
     return '\n'.join(res)
