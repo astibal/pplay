@@ -2030,7 +2030,7 @@ class Repeater:
 
                 if not host_platform or not host_platform.startswith("Windows"):
                     smatch = difflib.SequenceMatcher(None, bytes(d).decode("ascii", errors='ignore'),
-                                                     bytes(self.packets[self.total_packet_index]).decode("ascii",
+                                                     bytes(self.packets[self.total_packet_index-1]).decode("ascii",
                                                                                                          errors='ignore'),
                                                      autojunk=False)
                     qr = smatch.ratio()
