@@ -1133,14 +1133,8 @@ class Repeater:
                     # finalize packet
 
                     data = self.smcap_convert_lines_to_bytes(this_packet_bytes)
-                    if this_packet_origin == 'client':
-                        # print_green("# Converted: -->\n%s\n#<--" % (data,))
-                        self.packets.append(data)
-                        self.origins['client'].append(this_packet_index)
-                    else:
-                        # print_red("# Converted: -->\n%s\n#<--" % (data,))
-                        self.packets.append(data)
-                        self.origins['server'].append(this_packet_index)
+
+                    self.append_to_packets(this_packet_origin, data)
 
                     this_packet_bytes = []
                     this_packet_origin = None
