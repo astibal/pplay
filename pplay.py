@@ -2669,7 +2669,22 @@ def main():
                 magic = args.fuzz_magic[0]
 
             Features.prng = BytesGenerator(magic, use_hash=hashlib.sha256())
-            Features.fuzz_level = int(args.fuzz[0])
+            try:
+                Features.fuzz_level = int(args.fuzz[0])
+
+                # normalize
+                if Features.fuzz_level > 255:
+                    print_red("fuzz-level value too big, using max 255")
+                    Features.fuzz_level = 255
+                elif Features.fuzz_level < 0:
+                    print_red("fuzz-level value is negative, using min 0")
+                    Features.fuzz_level = 0
+
+            except ValueError:
+                print_red("fuzz-level value supposed to be integer between 0 and 255, using default %d"
+                          % Features.fuzz_level)
+                pass
+
             r.fuzz = True
 
         if args.tcp:
