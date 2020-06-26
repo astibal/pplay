@@ -2459,7 +2459,8 @@ def main():
     group1.add_argument('--smcap', nargs=1, help='textual capture taken by smithproxy')
     group1.add_argument('--gencap', nargs=1, help='generate connection data based on passed argument string')
 
-    ds.add_argument('--fuzz', nargs=1, help='specify fuzz level 0-255 to taint loaded data with random bytes.')
+    ds.add_argument('--fuzz', nargs=1, help='specify fuzz level 0-255 to taint loaded data with random bytes. '
+                                            'Less means more tainted result.')
     ds.add_argument('--fuzz-magic', nargs=1, help='specify fuzz magic seed to get different random bytes.')
 
     script_grp = group1.add_argument_group("Scripting options")
