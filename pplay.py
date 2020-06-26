@@ -1999,7 +1999,7 @@ class Repeater:
         # wait for some time
         loopcount = 0
         len_expected_data = len(expected_data)
-        len_d = len(str(d))
+        len_d = len(d)
         t_start = time.time()
 
         while len_d < len_expected_data:
@@ -2008,16 +2008,22 @@ class Repeater:
 
             delta = time.time() - t_start
             if delta > 1:
+                if Features.verbose:
+                    print_yellow("data receiving delay...")
                 time.sleep(0.05)
 
             if delta > 10:
+                print_red_bright("receiving timed out!")
                 break
 
             d += self.read()
-            len_d = len(str(d))
+            len_d = len(d)
 
+            if Features.verbose and len_d < len_expected_data:
+                print_white("expecting: %dB more" % (len_expected_data - len_d, ))
         else:
-            print_white("finished data: %d/%d" % (len_d, len_expected_data))
+            if Features.verbose:
+                print_white("finished data: %d/%d" % (len_d, len_expected_data))
 
         # there are still some data to send/receive
         if self.total_packet_index < len(self.packets):
