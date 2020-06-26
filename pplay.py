@@ -40,7 +40,7 @@ class Features:
     prng = None
     fuzz_level = 230
 
-pplay_version = "2.0.3"
+pplay_version = "2.0.4"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
