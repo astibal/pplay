@@ -2835,6 +2835,13 @@ def main():
             elif args.gencap:
                 r.read_gencap(im_ip, im_port)
 
+            if not len(r.packets):
+                hint = "\n no data extracted: check capture file"
+                if args.pcap:
+                    hint += " and connection id"
+                print_red_bright(hint + "\n")
+                sys.exit(3)
+
             if args.tcp:
                 r.is_udp = False
             elif args.udp:
