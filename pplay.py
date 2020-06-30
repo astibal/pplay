@@ -2056,7 +2056,7 @@ class Repeater:
                 break
 
             d += self.read(self.get_expected_data_len()-len(d))
-            len_d += len(d)
+            len_d = len(d)
 
             if len_d < len_expected_data:
                 verbose("expecting: %dB more" % (len_expected_data - len_d, ))
