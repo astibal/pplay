@@ -791,6 +791,7 @@ class Repeater:
         self.is_sctp = False
 
         self.fuzz = False
+        self.scatter = False
 
         # our peer (ip,port)
         self.target = (0, 0)
@@ -993,6 +994,29 @@ class Repeater:
         else:
             self.packets.append(bytes(data_chunk))
         self.origins[origin].append(current_index)
+
+    # script has its data already filled, no *cap args are present -> there is noone to tamper
+    # data before sending them.
+    # We need to get around this and re-add them
+    def scripter_refuzz(self):
+        if not self.fuzz or not Features.fuzz_prng or not self.scripter:
+            debug("not refuzzing, no prng or fuzz is not set")
+            return
+
+        new_data = []
+
+        # we need to do refuzz in the order, otherwise we would not match fuzzing order from --pcap and co
+        for i in range(0, len(self.scripter.packets)):
+            try:
+                new_data.append(
+                        bytes(Features.fuzz_prng.taint_bytes(self.scripter.packets[i], ceil=Features.fuzz_level))
+                )
+            except KeyError:
+                debuk("what? missing some indexes in data, very weird!")
+
+        self.scripter.packets = new_data
+        self.packets = new_data
+
 
     def list_gencap(self, to_print=True):
         gen = BytesGenerator(self.fnm, hashlib.sha256())
@@ -1946,7 +1970,9 @@ class Repeater:
 
             while total_written != total_data_len:
 
-                if Features.scatter_prng and not len(self.to_send) < 10 and not self.is_udp and scattered_count < 3:
+                if self.scatter and Features.scatter_prng and \
+                        not len(self.to_send) < 10 and not self.is_udp and scattered_count < 3:
+
                     max_send = Features.scatter_prng.rand_range(5, len(self.to_send))
                     cnt = self.write(self.to_send[0:max_send])
                     scattered_count += 1
@@ -2454,6 +2480,42 @@ class Repeater:
         print_yellow_bright("#       - will try to match on all buffer lines")
         print_yellow_bright("#    N  - prepare brand new data. Multiline, empty line commits. ")
 
+    def init_fuzz(self, args):
+        if args.fuzz:
+            magic = "pplay"
+
+            if args.fuzz_magic:
+                magic = args.fuzz_magic[0]
+
+            Features.fuzz_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
+            try:
+                Features.fuzz_level = int(args.fuzz[0])
+
+                # normalize
+                if Features.fuzz_level > 255:
+                    print_red("fuzz-level value too big, using max 255")
+                    Features.fuzz_level = 255
+                elif Features.fuzz_level < 0:
+                    print_red("fuzz-level value is negative, using min 0")
+                    Features.fuzz_level = 0
+
+            except ValueError:
+                print_red("fuzz-level value supposed to be integer between 0 and 255, using default %d"
+                          % Features.fuzz_level)
+                pass
+
+            self.fuzz = True
+
+    def init_scatter(self, args):
+        if args.scatter:
+            magic = "pplay"
+
+            if args.scatter_magic:
+                magic = args.scatter_magic[0]
+
+            Features.scatter_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
+            self.scatter = True
+
 
 # get string and digest ip and port part for IPv4 and IPv6
 def address_pair(ip_port_str):
@@ -2501,6 +2563,8 @@ def print_version():
     if Features.have_ssl:
         print("")
         print_red("CA signing support   : %d" % Features.have_crypto)
+
+
 
 def main():
     global g_script_module
@@ -2739,40 +2803,10 @@ def main():
         sys.exit(-1)
 
     if repeater is not None:
-        if args.fuzz:
-            magic = "pplay"
 
-            if args.fuzz_magic:
-                magic = args.fuzz_magic[0]
-
-            Features.fuzz_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
-            try:
-                Features.fuzz_level = int(args.fuzz[0])
-
-                # normalize
-                if Features.fuzz_level > 255:
-                    print_red("fuzz-level value too big, using max 255")
-                    Features.fuzz_level = 255
-                elif Features.fuzz_level < 0:
-                    print_red("fuzz-level value is negative, using min 0")
-                    Features.fuzz_level = 0
-
-            except ValueError:
-                print_red("fuzz-level value supposed to be integer between 0 and 255, using default %d"
-                          % Features.fuzz_level)
-                pass
-
-            repeater.fuzz = True
-
-
-        if args.scatter:
-            magic = "pplay"
-
-            if args.scatter_magic:
-                magic = args.scatter_magic[0]
-
-            Features.scatter_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
-
+        debuk("repeater crated")
+        repeater.init_fuzz(args)
+        repeater.init_scatter(args)
 
         if args.tcp:
             repeater.is_udp = False
@@ -2874,6 +2908,10 @@ def main():
             else:
                 repeater.scripter = PPlayScript(repeater, repeater.scripter_args)
                 repeater.load_scripter_defaults()
+
+            if repeater.fuzz:
+                debuk("refuzzing traffic")
+                repeater.scripter_refuzz()
 
         except ImportError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
