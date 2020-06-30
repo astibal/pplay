@@ -31,14 +31,17 @@ class Features:
     host_platform = None
 
     verbose = False
+    debuk = False
 
     option_dump_received_correct = False
     option_dump_received_different = True
     option_auto_send = 5
     option_socks = None
+    option_interactive = False
 
     prng = None
     fuzz_level = 230
+
 
 pplay_version = "2.0.4"
 
@@ -218,6 +221,16 @@ def print_white(what):
         print(what, file=sys.stderr)
 
 
+def debuk(what):
+    if Features.debuk:
+        print_white(what)
+
+
+def verbose(what):
+    if Features.verbose:
+        print_white(what)
+
+
 __vis_filter = b"""................................ !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[.]^_`abcdefghijklmnopqrstuvwxyz{|}~................................................................................................................................."""
 
 
@@ -243,9 +256,6 @@ def colorize(s, keywords):
         t = re.sub(k, Fore.CYAN + Style.BRIGHT + k + Fore.RESET + Style.RESET_ALL, t)
 
     return t
-
-
-# print_green_bright("TEST%d:%s" % (12,54))
 
 
 # download file from HTTP and store it in /tmp/, add it to g_delete_files
@@ -351,7 +361,7 @@ class SxyCA:
             "grant_ca": "false"
         }
 
-        # print("config to be written: %s" % (r,))
+        debuk("config to be written: %s" % (r,))
 
         try:
             with open(os.path.join(SxyCA.SETTINGS["path"], "sslca.json"), "w") as f:
@@ -720,6 +730,8 @@ class Repeater:
 
         self.fnm = fnm
 
+        self.select_timeout = 2
+
         self.packets = []
         self.origins = {}
 
@@ -967,10 +979,10 @@ class Repeater:
 
     def append_to_packets(self, origin, data_chunk):
         if isinstance(data_chunk, Padding) or type(data_chunk) == type(Padding):
-            # print("...  padding")
+            debuk("append_to_packets: ...  padding")
             return
         if not data_chunk:
-            # print("...  empty")
+            debuk("append_to_packets: ...  empty chunk")
             return
 
         current_index = len(self.packets)
@@ -1004,7 +1016,7 @@ class Repeater:
 
         packets = rdpcap(self.fnm)
 
-        # print("Looking for client connection %s:%s" % (im_ip,im_port))
+        debuk("read_pcap: Looking for client connection %s:%s" % (im_ip,im_port))
 
         for packet in packets:
 
@@ -1034,10 +1046,10 @@ class Repeater:
 
 
             except IndexError as e:
-                # IndexError: Layer [TCP|UDP|IP] not found
+                debuk("layer not found")
                 continue
 
-            # print ">>> %s:%s -> %s:%s" % (sip,sport,dip,dport)
+            debuk(">>> %s:%s -> %s:%s" % (sip, sport, dip, dport))
 
             origin = None
 
@@ -1075,16 +1087,11 @@ class Repeater:
                     continue
 
                 if len(extracted_payload) == 0:
-                    # print "No payload"
+                    debuk("read_pcal: no payload")
                     continue
-
-                # print("--")
-                # print("Len: %s",help(p))
 
                 for current_dato in extracted_payload:
                     self.append_to_packets(origin, current_dato)
-
-                # print "%s payload:\n>>%s<<" % (origin,p,)
 
     def read_smcap(self, im_ip, im_port):
         file_packets = []
@@ -1101,7 +1108,8 @@ class Repeater:
 
         fin = fileinput.input(files=[self.fnm, ])
         for line in fin:
-            # print_yellow("Processing: " + line.strip())
+            # too heavy debug
+            # debuk("Processing: " + line.strip())
 
             re_packet_start = re.compile(r'^\+\d+: +([^:]+):([^:]+)-([^:]+):([^:(]+)')
             re_packet_content_client = re.compile(r'^>\[([0-9a-f])+\][^0-9A-F]+([0-9A-F ]{2,49})')
@@ -1256,7 +1264,7 @@ class Repeater:
         with open(efile, "w") as o:
             o.write(out)
             os.chmod(efile, 0o755)
-            # print_red("pack: using " + efile)
+            debuk("pack: using " + efile)
 
     def export_script(self, efile):
 
@@ -1407,7 +1415,6 @@ class Repeater:
 
         if not self.nostdin:
             print_yellow_bright("#--> SEND MORE INTO SOCKET? [ c=CR | l=LF | x=CRLF | N=new data]")
-        # print_yellow_bright("#    Advanced: r=replace (vim 's' syntax: r/<orig>/<repl>/<count,0=all>)")
 
     def starttls(self):
         if Features.have_ssl:
@@ -1471,7 +1478,7 @@ class Repeater:
         try:
             self.ssl_context.keylog_file = "/tmp/sslkeys"
         except AttributeError as e:
-            print("no sslkeylogfile support")
+            print_red("no sslkeylogfile support")
             pass
 
         if self.ssl_cipher:
@@ -1494,7 +1501,12 @@ class Repeater:
                 self.ssl_context.load_cert_chain(certfile=self.ssl_ca_cert, keyfile=self.ssl_ca_key)
 
             if not on_sni:
-                self.ssl_context.sni_callback = self.imp_server_ssl_callback
+                try:
+                    self.ssl_context.sni_callback = self.imp_server_ssl_callback
+                except AttributeError:
+                    # older python3 versions
+                    self.ssl_context.set_servername_callback(self.imp_server_ssl_callback)
+
                 return self.ssl_context.wrap_socket(s, server_side=True)
             else:
                 s.context = self.ssl_context
@@ -1522,7 +1534,7 @@ class Repeater:
                     new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         else:
             if is_client and Features.option_socks:
-                # print_red_bright("SOCKS socket init") # DEBUG
+                debuk("SOCKS socket init")
 
                 new_socket = socks.socksocket()
                 if len(Features.option_socks) > 1:
@@ -1540,6 +1552,9 @@ class Repeater:
                         new_socket = sctp.sctpsocket_tcp(socket.AF_INET)
                     else:
                         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        if not is_client and not self.is_udp:
+                new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         return new_socket
 
@@ -1672,7 +1687,7 @@ class Repeater:
 
         if not self.is_udp:
             while True:
-                readable, writable, errored = select([s, ], [], [], 0.25)
+                readable, writable, errored = select([s, ], [], [], self.select_timeout)
                 if s in readable:
                     break
                 else:
@@ -1714,7 +1729,7 @@ class Repeater:
                 if port == 0:
                     port = int(self.server_port)
 
-                # print("custom IP:PORT %s:%s" % (ip,port) )
+                debuk("custom IP:PORT %s:%d" % (ip, port))
 
             self.whoami = "server"
 
@@ -1726,9 +1741,6 @@ class Repeater:
             server_address = (ip, int(port))
 
             s = self.create_socket(False, im_ver)
-
-            if not self.is_udp:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
             s.bind(server_address)
 
@@ -1797,22 +1809,29 @@ class Repeater:
         else:
             return self.sock.recv(pending)
 
-    def read(self, blocking=True):
+    def read(self, data_left, blocking=True):
 
         # print_red_bright("DEBUG: read(): blocking %d" % blocking)
 
         if Features.have_ssl and self.use_ssl:
-            data = ''
+            data = b''
 
             self.sock.setblocking(blocking)
+            cur_data_left = data_left
             while True:
                 try:
                     pen = self.sock.pending()
+                    debuk("SSL: pending: %dB, expecting %dB of data (stage 1)" % (pen, cur_data_left))
                     # print_red_bright("DEBUG: %dB pending in SSL buffer" % pen)
                     if pen == 0:
                         pen = 10240
 
-                    data = self.recv(pen)
+                    to_read = min(pen, cur_data_left)
+                    debuk("SSL: reading: %dB of data (stage 1)" % (to_read, ))
+                    red = self.recv(to_read)
+
+                    data += red
+                    cur_data_left -= len(data)
 
                 except ssl.SSLError as e:
                     # print_red_bright("DEBUG: read(): ssl error")
@@ -1823,24 +1842,35 @@ class Repeater:
                     continue
 
                 except SystemError as e:
-                    print_red_bright("read(): system error: %s" % (str(e),))
+                    debuk("read(): system error: %s" % (str(e),))
 
-                data_left = self.sock.pending()
-                while data_left:
-                    data += self.recv(data_left)
-                    data_left = self.sock.pending()
+                # continue to read data until we got size of expected data
+                attempts = 0
+                while cur_data_left > 0:
+                    attempts += 1
+                    debuk("SSL: expecting/reading: %dB of data" % cur_data_left)
+                    red = self.recv(cur_data_left)
+                    if len(red) == 0 and attempts > 50:
+                        debuk("SSL: connection data staled")
+                        break
+
+                    data += red
+                    cur_data_left -= len(data)
+
+                # if we got here, break (we have all data we wanted)
                 break
 
             self.tstamp_last_read = time.time()
             self.sock.setblocking(True)
             return data
         else:
+            debuk("expecting/reading: %dB of data" % data_left)
             self.tstamp_last_read = time.time()
             if not self.is_udp:
                 self.sock.setblocking(True)
-                return self.recv(24096)
+                return self.recv(data_left)
             else:
-                data, client_address = self.sock.recvfrom(24096)
+                data, client_address = self.sock.recvfrom(data_left)
                 self.target = client_address
                 self.sock.setblocking(True)
                 return data
@@ -1857,39 +1887,38 @@ class Repeater:
         else:
             return self.sock.sendto(what, whom)
 
-
     def write(self, data):
 
         if not data:
             return 0
 
-        ll = len(data)
-        l = 0
+        data_len = len(data)
+        already_written = 0
 
         if Features.have_ssl and self.use_ssl:
             self.tstamp_last_write = time.time()
-            while l < ll:
+            while already_written < data_len:
 
-                r = self.send(data[l:])
-                l += r
+                r = self.send(data[already_written:])
+                already_written += r
 
                 # print warning
-                if r != ll:
-                    print_red_bright("debug write: sent %d out of %d" % (l, ll))
+                if r != data_len:
+                    print_red_bright("debug write: sent %d out of %d" % (already_written, data_len))
 
-            return l
+            return already_written
 
         else:
             self.tstamp_last_write = time.time()
             if not self.is_udp:
-                while l < ll:
-                    r = self.send(data[l:])
-                    l += r
+                while already_written < data_len:
+                    r = self.send(data[already_written:])
+                    already_written += r
 
-                    if r != ll:
-                        print_red_bright("debug write: sent %d out of %d" % (l, ll))
+                    if r != data_len:
+                        print_red_bright("debug write: sent %d out of %d" % (already_written, data_len))
 
-                return l
+                return already_written
 
             else:
                 return self.sendto(data, self.target)
@@ -1934,7 +1963,8 @@ class Repeater:
     def detect_parent_death(self):
         # mypid = os.getpid()
         # parpid = os.getppid()
-        # print_red_bright("mypid %d, parent pid %d" % (mypid,parpid,))        
+
+        # debuk("mypid %s, parent pid %s" % (str(mypid), str(parpid),))
 
         return os.getppid() == 1
 
@@ -1946,7 +1976,8 @@ class Repeater:
 
         inputs = [self.sock, sys.stdin]
         if self.nostdin:
-            # print_red_bright("STDIN not used")
+
+            # debuk("STDIN will not be used")
             inputs = [self.sock, ]
 
         outputs = [self.sock]
@@ -1958,12 +1989,13 @@ class Repeater:
             w = []
             e = []
 
-            if self.sock.pending(): r.append(self.sock)  # if there are bytes,
+            if self.sock.pending():
+                r.append(self.sock)  # if there are bytes,
 
             if not no_writes:
                 w.append(self.sock)  # FIXME: we assume we can always write without select
 
-            rr, ww, ee = select(inputs, outputs, [], 0.2)
+            rr, ww, ee = select(inputs, outputs, [], self.select_timeout)
             if self.sock in rr:
                 r.append(self.sock)
             if sys.stdin in rr:
@@ -1976,7 +2008,7 @@ class Repeater:
 
         else:
 
-            r, w, e = select(inputs, outputs, [], 0.2)
+            r, w, e = select(inputs, outputs, [], self.select_timeout)
             if self.detect_parent_death():
                 self.on_parent_death()
 
@@ -1985,12 +2017,19 @@ class Repeater:
     def is_eot(self):
         return self.total_packet_index >= len(self.packets)
 
+    def get_expected_data_len(self):
+        try:
+            return len(self.packets[self.total_packet_index])
+        except IndexError:
+            # let's expect whatever we can receive
+            return 0
+
     def packet_read(self):
-        # print_red_bright("DEBUG: reading socket")
+        debuk("packet_read: reading socket")
 
-        d = self.read()
+        d = self.read(self.get_expected_data_len())
 
-        # print_red_bright("DEBUG: read returned %d" % len(d))
+        debuk("packet_read: read returned %d" % len(d))
         if not len(d):
             return len(d)
 
@@ -2003,7 +2042,7 @@ class Repeater:
         t_start = time.time()
 
         while len_d < len_expected_data:
-            # print_white("incomplete data: %d/%d" % (len_d,len_expected_data))
+            verbose("incomplete data: %d/%d" % (len_d,len_expected_data))
             loopcount += 1
 
             delta = time.time() - t_start
@@ -2016,14 +2055,13 @@ class Repeater:
                 print_red_bright("receiving timed out!")
                 break
 
-            d += self.read()
-            len_d = len(d)
+            d += self.read(self.get_expected_data_len()-len(d))
+            len_d += len(d)
 
-            if Features.verbose and len_d < len_expected_data:
-                print_white("expecting: %dB more" % (len_expected_data - len_d, ))
+            if len_d < len_expected_data:
+                verbose("expecting: %dB more" % (len_expected_data - len_d, ))
         else:
-            if Features.verbose:
-                print_white("finished data: %d/%d" % (len_d, len_expected_data))
+            verbose("finished data: %d/%d" % (len_d, len_expected_data))
 
         # there are still some data to send/receive
         if self.total_packet_index < len(self.packets):
@@ -2249,6 +2287,15 @@ class Repeater:
                         self.sock.shutdown(socket.SHUT_WR)
                     self.sock.close()
                     sys.exit(0)
+
+                # we won't be notified on socket close in case of UDP and next dgram would be understood as belonging
+                # to this connection - that is typically not the case - next packet is usually new connection attempt.
+                # we have to return now to re-init the loop and not doing select
+                #
+                # in case of TCP (or other streams), we would terminate connection even if --exitoneot is not set
+                # end even we want to keep the session up
+                if self.is_udp:
+                    break
 
             r, w, e = self.select_wrapper(self.write_end)
 
@@ -2576,6 +2623,7 @@ def main():
     var.add_argument('--nocolor', required=False, action='store_true', help='Don\'t use colorama.')
 
     var.add_argument('--verbose', required=False, action='store_true', help='Print out more output.')
+    var.add_argument('--debug', required=False, action='store_true', help='Print out debugging info.')
 
     if Features.have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
@@ -2611,6 +2659,10 @@ def main():
     if args.verbose:
         Features.verbose = True
 
+    if args.debug:
+        Features.verbose = True
+        Features.debuk = True
+
     if Features.have_colorama:
         if not args.nocolor:
             colorama.init(autoreset=False, strip=False)
@@ -2621,7 +2673,7 @@ def main():
         print_version()
         sys.exit(1)
 
-    r = None
+    repeater = None
     if (Features.have_scapy and args.pcap) or args.smcap or args.gencap:
 
         fnm = ""
@@ -2651,13 +2703,13 @@ def main():
                 print_red_bright("local file doesn't exist: " + fnm)
                 sys.exit(3)
 
-            r = Repeater(fnm, "")
+            repeater = Repeater(fnm, "")
 
     elif args.list:
         pass
 
     elif args.script or args.export:
-        r = Repeater(None, "")
+        repeater = Repeater(None, "")
 
     elif Features.have_paramiko and args.remote_ssh:
         # the same as script, but we won't init repeater
@@ -2668,7 +2720,7 @@ def main():
         print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
-    if r is not None:
+    if repeater is not None:
         if args.fuzz:
             magic = "FuzzingIsFunz"
 
@@ -2692,67 +2744,67 @@ def main():
                           % Features.fuzz_level)
                 pass
 
-            r.fuzz = True
+            repeater.fuzz = True
 
         if args.tcp:
-            r.is_udp = False
+            repeater.is_udp = False
 
         if args.udp:
-            r.is_udp = True
+            repeater.is_udp = True
 
         if Features.have_sctp and args.sctp:
-            r.is_sctp = True
+            repeater.is_sctp = True
 
         if args.ssl:
             if args.udp:
                 print_red_bright("No DTLS support in python ssl wrappers, sorry.")
                 sys.exit(-1)
 
-            r.use_ssl = True
+            repeater.use_ssl = True
 
         if args.ssl3:
-            r.sslv = 3
+            repeater.sslv = 3
         if args.tls1:
-            r.sslv = 4
+            repeater.sslv = 4
         if args.tls1_1:
-            r.sslv = 5
+            repeater.sslv = 5
         if args.tls1_2:
-            r.sslv = 6
+            repeater.sslv = 6
         if Features.have_tls13 and args.tls1_3:
-            r.sslv = 7
+            repeater.sslv = 7
 
         if args.cert:
-            r.ssl_cert = args.cert[0]
+            repeater.ssl_cert = args.cert[0]
 
         if args.key:
-            r.ssl_key = args.key[0]
+            repeater.ssl_key = args.key[0]
 
         if args.cipher:
-            r.ssl_cipher = ":".join(args.cipher)
+            repeater.ssl_cipher = ":".join(args.cipher)
 
         if args.sni:
-            r.ssl_sni = args.sni[0]
+            repeater.ssl_sni = args.sni[0]
 
         if args.alpn:
-            r.ssl_alpn = args.alpn[0].split(',')
+            repeater.ssl_alpn = args.alpn[0].split(',')
 
         if args.ecdh_curve:
-            r.ssl_ecdh_curve = args.ecdh_curve[0]
+            repeater.ssl_ecdh_curve = args.ecdh_curve[0]
 
         if Features.have_crypto:
             if args.cacert:
-                r.ssl_ca_cert = args.cacert[0]
+                repeater.ssl_ca_cert = args.cacert[0]
 
             if args.cakey:
-                r.ssl_ca_key = args.cakey[0]
+                repeater.ssl_ca_key = args.cakey[0]
 
     if args.list:
         if args.smcap:
-            r.list_smcap()
+            repeater.list_smcap()
         elif Features.have_scapy and args.pcap:
-            r.list_pcap(args.verbose)
+            repeater.list_pcap(args.verbose)
         elif args.gencap:
-            r.list_gencap()
+            repeater.list_gencap()
 
         sys.exit(0)
 
@@ -2761,7 +2813,7 @@ def main():
             pr = None
             if args.smprint:
                 pr = args.smprint[0]
-                r.list_smcap(pr)
+                repeater.list_smcap(pr)
                 sys.exit(0)
 
         sys.exit(-1)
@@ -2770,7 +2822,7 @@ def main():
     if args.script:
 
         if args.script_args:
-            r.scripter_args = args.script_args[0]
+            repeater.scripter_args = args.script_args[0]
 
         try:
 
@@ -2789,11 +2841,11 @@ def main():
                     mod_name = mod_name[0:-3]
                 g_script_module = __import__(os.path.basename(mod_name), globals(), locals(), [], -1)
 
-                r.scripter = g_script_module.PPlayScript(r, r.scripter_args)
-                r.load_scripter_defaults()
+                repeater.scripter = g_script_module.PPlayScript(repeater, repeater.scripter_args)
+                repeater.load_scripter_defaults()
             else:
-                r.scripter = PPlayScript(r, r.scripter_args)
-                r.load_scripter_defaults()
+                repeater.scripter = PPlayScript(repeater, repeater.scripter_args)
+                repeater.load_scripter_defaults()
 
         except ImportError as e:
             print_red_bright("Error loading script file: %s" % (str(e),))
@@ -2806,7 +2858,7 @@ def main():
 
         # attempt
         if (Features.have_scapy and args.pcap) and not args.connection:
-            candidate = r.list_pcap(False, do_print=False)
+            candidate = repeater.list_pcap(False, do_print=False)
             if not candidate:
                 print_white_bright("--connection argument has to be set with your data (cannot guess first usable flow)")
                 sys.exit(-1)
@@ -2829,13 +2881,13 @@ def main():
                 print("Using connection: " + im_ip + ":" + im_port + " : version " + str(im_ver))
 
             if args.smcap:
-                r.read_smcap(im_ip, im_port)
+                repeater.read_smcap(im_ip, im_port)
             elif Features.have_scapy and args.pcap:
-                r.read_pcap(im_ip, im_port)
+                repeater.read_pcap(im_ip, im_port)
             elif args.gencap:
-                r.read_gencap(im_ip, im_port)
+                repeater.read_gencap(im_ip, im_port)
 
-            if not len(r.packets):
+            if not len(repeater.packets):
                 hint = "\n no data extracted: check capture file"
                 if args.pcap:
                     hint += " and connection id"
@@ -2843,9 +2895,9 @@ def main():
                 sys.exit(3)
 
             if args.tcp:
-                r.is_udp = False
+                repeater.is_udp = False
             elif args.udp:
-                r.is_udp = True
+                repeater.is_udp = True
 
         elif args.smcap:
             # no --connection option setsockopt
@@ -2853,30 +2905,30 @@ def main():
             # okay, smcap holds only single connection
             # detect and read the connection
 
-            ip_port = r.list_smcap().split(":")
+            ip_port = repeater.list_smcap().split(":")
             if len(ip_port) > 1:
                 im_ip = ip_port[0]
                 im_port = ip_port[1]
-                r.read_smcap(im_ip, im_port)
+                repeater.read_smcap(im_ip, im_port)
 
         # cannot collide with script - those are in the exclusive argparse group
         if args.export:
 
             if args.cert:
-                r.ssl_cert = args.cert[0]
+                repeater.ssl_cert = args.cert[0]
 
             if args.key:
-                r.ssl_key = args.key[0]
+                repeater.ssl_key = args.key[0]
 
             if Features.have_crypto:
                 if args.ca_cert:
-                    r.ssl_ca_cert = args.cacert[0]
+                    repeater.ssl_ca_cert = args.cacert[0]
 
                 if args.ca_key:
-                    r.ssl_ca_key = args.cakey[0]
+                    repeater.ssl_ca_key = args.cakey[0]
 
             export_file = args.export[0]
-            if r.export_script(export_file):
+            if repeater.export_script(export_file):
                 print_white_bright("Template python script has been exported to file %s" % (export_file,))
             sys.exit(0)
 
@@ -2884,19 +2936,19 @@ def main():
             pack_file = args.pack[0]
 
             if args.cert:
-                r.ssl_cert = args.cert[0]
+                repeater.ssl_cert = args.cert[0]
 
             if args.key:
-                r.ssl_key = args.key[0]
+                repeater.ssl_key = args.key[0]
 
             if Features.have_crypto:
                 if args.cacert:
-                    r.ssl_ca_cert = args.cacert[0]
+                    repeater.ssl_ca_cert = args.cacert[0]
 
                 if args.cakey:
-                    r.ssl_ca_key = args.cakey[0]
+                    repeater.ssl_ca_key = args.cakey[0]
 
-            r.export_self(pack_file)
+            repeater.export_self(pack_file)
             print_white_bright("Exporting self to file %s" % (pack_file,))
             sys.exit(0)
 
@@ -2943,20 +2995,20 @@ def main():
                             "remote-ssh[this host] - packing to tempfile (you need all arguments for --pack)")
 
                         if args.cert:
-                            r.ssl_cert = args.cert[0]
+                            repeater.ssl_cert = args.cert[0]
 
                         if args.key:
-                            r.ssl_key = args.key[0]
+                            repeater.ssl_key = args.key[0]
 
                         if Features.have_crypto:
                             if args.cacert:
-                                r.ssl_ca_cert = args.cacert[0]
+                                repeater.ssl_ca_cert = args.cacert[0]
 
                             if args.cakey:
-                                r.ssl_ca_key = args.cakey[0]
+                                repeater.ssl_ca_key = args.cakey[0]
 
                         temp_file = tempfile.NamedTemporaryFile(prefix="pplay", suffix="packed")
-                        r.export_self(temp_file.name)
+                        repeater.export_self(temp_file.name)
                         print_white_bright("remote-ssh[this host] - done")
                         my_source = open(temp_file.name).read()
 
@@ -3043,8 +3095,8 @@ def main():
                                     if len(d) > 0:
                                         sys.stdout.write(bytes(d).decode('utf-8'))
 
-                                r, w, e = select([sys.stdin, ], [], [], 0.1)
-                                if sys.stdin in r:
+                                repeater, w, e = select([sys.stdin, ], [], [], repeater.select_timeout)
+                                if sys.stdin in repeater:
                                     cmd = sys.stdin.readline()
 
                                     # print_red("cmd: " + cmd + "<<")
@@ -3090,7 +3142,7 @@ def main():
                                          "      --cakey and --cacert argument for generated certs by CA\n")
                         sys.exit(-1)
 
-                r.use_ssl = True
+                repeater.use_ssl = True
 
             if args.noauto:
                 Features.option_auto_send = -1
@@ -3099,41 +3151,46 @@ def main():
 
                 if args.nostdin:
                     print_red_bright("stdin will be unmonitored")
-                    r.nostdin = True
+                    repeater.nostdin = True
 
             else:
                 # Features.option_auto_send = 5
                 pass
 
             if args.nohex:
-                r.nohexdump = True
+                repeater.nohexdump = True
 
             if args.exitoneot:
-                r.exitoneot = True
+                repeater.exitoneot = True
 
             if args.exitondiff:
-                r.exitondiff = True
+                repeater.exitondiff = True
+
+            if args.udp:
+                if len(repeater.origins['server']) > 0 and repeater.origins['server'][0] == 0:
+                    print_red_bright("datagram connection cannot start sending data from server")
+                    sys.exit(-1)
 
             if args.client:
 
                 if args.sport:
-                    r.custom_sport = args.sport[0]
+                    repeater.custom_sport = args.sport[0]
 
                 if len(args.client) > 0:
-                    r.custom_ip = args.client[0]
+                    repeater.custom_ip = args.client[0]
 
-                r.impersonate('client')
+                repeater.impersonate('client')
 
             elif args.server:
 
 
                 if len(args.server) > 0:
                     # arg type is '?' so no list there, just string
-                    r.custom_ip = args.server
+                    repeater.custom_ip = args.server
                 else:
-                    r.custom_ip = None
+                    repeater.custom_ip = None
 
-                r.impersonate('server')
+                repeater.impersonate('server')
 
     else:
         print_white_bright("No-op!")
