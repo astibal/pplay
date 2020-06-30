@@ -39,9 +39,10 @@ class Features:
     option_socks = None
     option_interactive = False
 
-    prng = None
+    fuzz_prng = None
     fuzz_level = 230
 
+    scatter_prng = None
 
 pplay_version = "2.0.4"
 
@@ -988,7 +989,7 @@ class Repeater:
         current_index = len(self.packets)
 
         if self.fuzz:
-            self.packets.append(bytes(Features.prng.taint_bytes(bytes(data_chunk), ceil=Features.fuzz_level)))
+            self.packets.append(bytes(Features.fuzz_prng.taint_bytes(bytes(data_chunk), ceil=Features.fuzz_level)))
         else:
             self.packets.append(bytes(data_chunk))
         self.origins[origin].append(current_index)
@@ -1552,6 +1553,7 @@ class Repeater:
                         new_socket = sctp.sctpsocket_tcp(socket.AF_INET)
                     else:
                         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                new_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         if not is_client and not self.is_udp:
                 new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1940,8 +1942,17 @@ class Repeater:
             total_data_len = len(self.to_send)
             total_written = 0
 
+            scattered_count = 0
+
             while total_written != total_data_len:
-                cnt = self.write(self.to_send)
+
+                if Features.scatter_prng and not len(self.to_send) < 10 and not self.is_udp and scattered_count < 3:
+                    max_send = Features.scatter_prng.rand_range(5, len(self.to_send))
+                    cnt = self.write(self.to_send[0:max_send])
+                    scattered_count += 1
+                    time.sleep(0.01 * Features.scatter_prng.rand_range(1, 20))
+                else:
+                    cnt = self.write(self.to_send)
 
                 # not really clean debug, lots of data will be duplicated
                 # if cnt > 200: cnt = 200
@@ -2514,7 +2525,14 @@ def main():
 
     ds.add_argument('--fuzz', nargs=1, help='specify fuzz level 0-255 to taint loaded data with random bytes. '
                                             'Less means more tainted result.')
-    ds.add_argument('--fuzz-magic', nargs=1, help='specify fuzz magic seed to get different random bytes.')
+    ds.add_argument('--fuzz-magic', nargs=1, help='specify fuzz magic seed to get different random bytes (default: "pplay").')
+
+    ds.add_argument('--scatter', required=False, action='store_true',
+                      help='prng stream scattering - split segments into more payloads (noop for datagrams)')
+
+    ds.add_argument('--scatter-magic', required=False, nargs=1,
+                      help='prng stream scattering - scatter magic seed (default: "pplay")')
+
 
     script_grp = group1.add_argument_group("Scripting options")
     script_grp.add_argument('--script', nargs=1,
@@ -2722,12 +2740,12 @@ def main():
 
     if repeater is not None:
         if args.fuzz:
-            magic = "FuzzingIsFunz"
+            magic = "pplay"
 
             if args.fuzz_magic:
                 magic = args.fuzz_magic[0]
 
-            Features.prng = BytesGenerator(magic, use_hash=hashlib.sha256())
+            Features.fuzz_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
             try:
                 Features.fuzz_level = int(args.fuzz[0])
 
@@ -2745,6 +2763,16 @@ def main():
                 pass
 
             repeater.fuzz = True
+
+
+        if args.scatter:
+            magic = "pplay"
+
+            if args.scatter_magic:
+                magic = args.scatter_magic[0]
+
+            Features.scatter_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
+
 
         if args.tcp:
             repeater.is_udp = False
@@ -3204,7 +3232,7 @@ def cleanup():
     global g_delete_files
     for f in g_delete_files:
         try:
-            # print_white("unlink tempfile - %s" % (f,))
+            debuk("unlink tempfile - %s" % (f,))
             os.unlink(f)
         except OSError as e:
             pass
