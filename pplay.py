@@ -1577,7 +1577,9 @@ class Repeater:
                         new_socket = sctp.sctpsocket_tcp(socket.AF_INET)
                     else:
                         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                new_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                if not self.is_sctp:
+                    new_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         if not is_client and not self.is_udp:
                 new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
