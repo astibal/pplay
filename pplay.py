@@ -142,11 +142,18 @@ except ImportError as e:
 
 def help_sctp():
     print()
-    print_white_bright("To install support for SCTP in debian-based linux:")
-    print("   apt install libsctp-dev libsctp1 lksctp-tools")
-    print("   pip3 install pysctp3")
-    print()
+    print_white_bright("To install support for SCTP in linux:")
+    # pysctp3 from pip is **broken**
+    # print("   apt install libsctp-dev libsctp1 lksctp-tools")
+    # print("   pip3 install pysctp3")
+    # print()
 
+    print()
+    print_red('    =!= pip version 0.7 is broken =!=')
+    print()
+    print("    git clone https://github.com/P1sec/pysctp/")
+    print("    cd pysctp/")
+    print("    python setup.py install")
 
 
 def str_time():
