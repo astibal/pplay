@@ -50,7 +50,7 @@ pplay_version = "2.0.5"
 # EMBEDDED DATA END
 
 title = 'pplay - application payload player - %s' % (pplay_version,)
-pplay_copyright = "written by Ales Stibal <astib@mag0.net> (c) 2014"
+pplay_copyright = "written by Ales Stibal <astib@mag0.net>"
 
 g_script_module = None
 g_delete_files = []
@@ -225,6 +225,18 @@ def print_white_bright(what):
 def print_white(what):
     if Features.have_colorama:
         print(Fore.WHITE + what + Style.RESET_ALL, file=sys.stderr)
+    else:
+        print(what, file=sys.stderr)
+
+def print_blue(what):
+    if Features.have_colorama:
+        print(Fore.BLUE + what + Style.RESET_ALL, file=sys.stderr)
+    else:
+        print(what, file=sys.stderr)
+
+def print_blue_bright(what):
+    if Features.have_colorama:
+        print(Fore.BLUE + Style.BRIGHT + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
 
@@ -2554,26 +2566,41 @@ def address_pair(ip_port_str):
     return im_ip, im_port, address_version
 
 
+def print_ok_err(prefix, cond, true_string="OK", false_string="not present", false_hint=None):
+    s = prefix
+    if cond:
+        print_green(s + ": " + true_string)
+    else:
+        suff = ''
+        if false_hint:
+            suff = "    " + false_hint
+        print_red(s + ": " + false_string + " " + suff)
+
 def print_version():
+    print("")
     print_yellow_bright(title)
     print_yellow_bright(pplay_copyright)
     print("")
-    print_red("Colors support       : %d" % Features.have_colorama)
-    print_red("PCAP files support   : %d" % Features.have_scapy)
-    print_red("SSL support          : %d" % Features.have_ssl)
-    print_red("remote SSH support   : %d" % Features.have_paramiko)
-    print_red("remote files support : %d" % Features.have_requests)
-    print_red("Socks support        : %d" % Features.have_socks)
-    if Features.have_sctp:
-        print_red("SCTP support         : %d" % Features.have_sctp)
-    else:
-        print_red("SCTP support         : %d (check --help-sctp)" % Features.have_sctp)
+
+    print_ok_err("Colors support       ", Features.have_colorama, false_hint="(python3 -m pip install colorama)")
+    print_ok_err("PCAP files support   ", Features.have_scapy, false_hint="(python3 -m pip install scapy)")
+    print_ok_err("SSL support          ", Features.have_ssl, false_hint="(hmm... python usually comes with ssl module)")
+    print_ok_err("remote SSH support   ", Features.have_paramiko, false_hint="(python3 -m pip install paramiko)")
+    print_ok_err("remote files support ", Features.have_requests, false_hint="(python3 -m pip install requests)")
+    print_ok_err("Socks support        ", Features.have_socks, false_hint="(python3 -m pip install pysocks)")
+    print_ok_err("SCTP support         ", Features.have_sctp, false_hint="(check --help-sctp)")
 
     if Features.have_ssl:
         print("")
-        print_red("CA signing support   : %d" % Features.have_crypto)
+        print_ok_err("CA signing support   ", Features.have_crypto, false_hint="(python3 -m pip install cryptography)")
+    print("")
 
-
+def print_overview():
+    print_yellow(
+        "\nOverview:\npplay is typically used as 2 running instances, one as a --server, and the other as a --client.")
+    print_yellow("Data are taken from ie. --pcap file.")
+    print_yellow("You probably want to run instances on different hosts, but with very same data.")
+    print_yellow("\nFor more options see --help\n .")
 
 def main():
     global g_script_module
@@ -2807,8 +2834,8 @@ def main():
         pass
     else:
         print_version()
+        print_overview()
 
-        print_red_bright("\nerror: nothing to do!")
         sys.exit(-1)
 
     if repeater is not None:
@@ -3269,10 +3296,7 @@ def main():
 
     else:
         print_white_bright("No-op!")
-        print_white("Typically you want to set either --client <ip:port> or --server <[ip:]port>")
-        print_white("\n ... for supported features see --version, for more options see --help")
-
-    # parser.print_help()
+        print_overview()
 
 
 def cleanup():
