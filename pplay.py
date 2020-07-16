@@ -2576,23 +2576,23 @@ def print_ok_err(prefix, cond, true_string="OK", false_string="not present", fal
             suff = "    " + false_hint
         print_red(s + ": " + false_string + " " + suff)
 
-def print_version():
+def print_version(verbose=False):
     print("")
     print_yellow_bright(title)
     print_yellow_bright(pplay_copyright)
     print("")
 
-    print_ok_err("Colors support       ", Features.have_colorama, false_hint="(python3 -m pip install colorama)")
-    print_ok_err("PCAP files support   ", Features.have_scapy, false_hint="(python3 -m pip install scapy)")
-    print_ok_err("SSL support          ", Features.have_ssl, false_hint="(hmm... python usually comes with ssl module)")
-    print_ok_err("remote SSH support   ", Features.have_paramiko, false_hint="(python3 -m pip install paramiko)")
-    print_ok_err("remote files support ", Features.have_requests, false_hint="(python3 -m pip install requests)")
-    print_ok_err("Socks support        ", Features.have_socks, false_hint="(python3 -m pip install pysocks)")
-    print_ok_err("SCTP support         ", Features.have_sctp, false_hint="(check --help-sctp)")
-
+    print_green("Supported features:\n")
+    print_ok_err("Nice colors in terminal ", Features.have_colorama, false_hint="(python3 -m pip install colorama)")
+    print_ok_err("PCAP file reader        ", Features.have_scapy, false_hint="(python3 -m pip install scapy)")
+    print_ok_err("builtin SSL stack       ", Features.have_ssl, false_hint="(hmm... python usually comes with ssl module)")
     if Features.have_ssl:
-        print("")
-        print_ok_err("CA signing support   ", Features.have_crypto, false_hint="(python3 -m pip install cryptography)")
+        print_ok_err("TLS server auto cert    ", Features.have_crypto, false_hint="(python3 -m pip install cryptography)")
+    print_ok_err("SSH replica execution   ", Features.have_paramiko, false_hint="(python3 -m pip install paramiko)")
+    print_ok_err("using remote URL files  ", Features.have_requests, false_hint="(python3 -m pip install requests)")
+    print_ok_err("SOCKS proxy for client  ", Features.have_socks, false_hint="(python3 -m pip install pysocks)")
+    print_ok_err("SCTP protocol           ", Features.have_sctp, false_hint="(check --help-sctp)")
+
     print("")
 
 def print_overview():
