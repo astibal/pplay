@@ -8,7 +8,7 @@ with open(path.join(this_directory, 'README.rst')) as fh:
 
 setuptools.setup(
     name='pplay',
-    version='2.0.5post4',
+    version='2.0.6post1',
     scripts=['pplay.py', 'smcap2pcap'],
     author="Ales Stibal",
     author_email="astib@mag0.net",
