@@ -3197,8 +3197,8 @@ def main():
                                     if len(d) > 0:
                                         sys.stdout.write(bytes(d).decode('utf-8'))
 
-                                repeater, w, e = select([sys.stdin, ], [], [], repeater.select_timeout)
-                                if sys.stdin in repeater:
+                                r, w, e = select([sys.stdin, ], [], [], repeater.select_timeout)
+                                if sys.stdin in r:
                                     cmd = sys.stdin.readline()
 
                                     # print_red("cmd: " + cmd + "<<")
