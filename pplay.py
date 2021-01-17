@@ -668,10 +668,10 @@ class BytesGenerator:
         return ret
 
     def rand_int(self):
-        return struct.unpack('l', self.rand_bytes(8))[0]
+        return struct.unpack('>l', self.rand_bytes(4))[0]
 
     def rand_uint(self):
-        return struct.unpack('L', self.rand_bytes(8))[0]
+        return struct.unpack('>L', self.rand_bytes(4))[0]
 
     def rand_choice(self, lst):
         return lst[self.rand_uint() % len(lst)]
