@@ -3205,7 +3205,8 @@ def main():
 
                                 if arg.startswith("--remote") or arg.startswith("--smcap") or arg.startswith("--pcap") \
                                         or arg.startswith("--key") or arg.startswith("--cert") \
-                                        or arg.startswith("--cakey") or arg.startswith("--cacert"):
+                                        or arg.startswith("--cakey") or arg.startswith("--cacert") \
+                                        or arg.startswith("--gencap"):
                                     filter_next = True
                                     continue
 
