@@ -14,6 +14,7 @@ import tempfile
 import json
 import hashlib
 import struct
+import threading
 
 from select import select
 
@@ -44,7 +45,7 @@ class Features:
 
     scatter_prng = None
 
-pplay_version = "2.0.6"
+pplay_version = "2.0.8"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -824,6 +825,8 @@ class Repeater:
         if host_platform and host_platform.startswith("Windows"):
             self.nostdin = True
 
+        self.die_after = 0
+        self.deathhand = None
 
     def reset(self):
         self.to_send = ''
@@ -1019,7 +1022,7 @@ class Repeater:
     # We need to get around this and re-add them
     def scripter_refuzz(self):
         if not self.fuzz or not Features.fuzz_prng or not self.scripter:
-            debug("not refuzzing, no prng or fuzz is not set")
+            debuk("not refuzzing, no prng or fuzz is not set")
             return
 
         new_data = []
@@ -1382,8 +1385,29 @@ class Repeater:
 
         return None
 
+    # this is safety measure - kill itself ungracefully after specified time in seconds elapses
+    def killer_is_me(self):
+        while True:
+            time.sleep(1)
+            if self.die_after < 0:
+                sys.stdout.flush()
+
+                # -10 is cancel signal
+                if self.die_after > -10:
+                    print_red("killed by the deathhand")
+                    cleanup()
+                    os._exit(-15)  # don't mess with other threads and just finish it
+                else:
+                    return
+
+            self.die_after -= 1
+
     # for spaghetti lovers
     def impersonate(self, who):
+
+        if self.die_after > 0:
+            self.deathhand = threading.Thread(target=Repeater.killer_is_me, args=(self, ))
+            self.deathhand.start()
 
         if who == "client":
             self.impersonate_client()
@@ -1669,6 +1693,7 @@ class Repeater:
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
+            self.die_after = -10
             return
 
     def imp_server_ssl_callback(self, sock, sni, ctx):
@@ -1816,6 +1841,7 @@ class Repeater:
 
                     self.packet_loop()
                 except KeyboardInterrupt as e:
+                    self.die_after = -10
                     self.ctrc_count += 1
                     if self.ctrc_count > 1:
                         sys.exit(0)
@@ -1832,7 +1858,11 @@ class Repeater:
                         "\nConnection with %s:%s terminated: %s" % (client_address[0], client_address[1], e,))
 
                     if self.exitoneot:
-                        print_red("Exiting on EOT")
+
+                        # clean up death timer
+                        if self.deathhand:
+                            self.die_after = -10
+
                         sys.exit(0)
 
                     if self.is_udp:
@@ -1840,6 +1870,7 @@ class Repeater:
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
+            self.die_after = -10
             return
         except socket.error as e:
             print_white_bright("Server error: %s" % (e,))
@@ -1858,7 +1889,7 @@ class Repeater:
 
     def read(self, data_left, blocking=True):
 
-        # print_red_bright("DEBUG: read(): blocking %d" % blocking)
+        debuk("read(): blocking %d" % blocking)
 
         if Features.have_ssl and self.use_ssl:
             data = b''
@@ -1869,7 +1900,7 @@ class Repeater:
                 try:
                     pen = self.sock.pending()
                     debuk("SSL: pending: %dB, expecting %dB of data (stage 1)" % (pen, cur_data_left))
-                    # print_red_bright("DEBUG: %dB pending in SSL buffer" % pen)
+
                     if pen == 0:
                         pen = 10240
 
@@ -1881,7 +1912,7 @@ class Repeater:
                     cur_data_left -= len(data)
 
                 except ssl.SSLError as e:
-                    # print_red_bright("DEBUG: read(): ssl error")
+                    debuk("read(): ssl error: %s" % (str(e), ))
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
 
                     if e.errno != ssl.SSL_ERROR_WANT_READ:
@@ -2253,7 +2284,7 @@ class Repeater:
                             self.auto_send_now = time.time()
                             return
 
-                # print_white_bright("debug: autosend = " + str(Features.option_auto_send))
+                # debuk("debug: autosend = " + str(Features.option_auto_send))
 
                 # auto_send feature
                 if Features.option_auto_send > 0 and self.send_aligned():
@@ -2319,14 +2350,14 @@ class Repeater:
 
             if self.is_eot():
 
-                # print_red_bright("DEBUG: is_eot returns true")
+                debuk("is_eot is true")
 
                 if not eof_notified:
                     print_red_bright("### END OF TRANSMISSION ###")
                     eof_notified = True
 
                 if self.exitoneot:
-                    # print_red_bright("DEBUG: exitoneot true")
+                    debuk("exitoneot true")
 
                     if self.whoami == "server":
                         if Features.option_auto_send >= 0:
@@ -2334,15 +2365,19 @@ class Repeater:
                         else:
                             time.sleep(0.5)
 
-                        # FIXME: this blocks on client
-                        if self.ssl_context:
-                            # print_red_bright("DEBUG: unwrapping SSL")
-                            self.sock.unwrap()
-
                     print_red("Exiting on EOT")
+
+                    # clean up death timer
+                    if self.deathhand:
+                        self.die_after = -10
 
                     if not self.is_udp:
                         self.sock.shutdown(socket.SHUT_WR)
+
+                    if self.whoami == 'client':
+                        # sleep a while on client
+                        time.sleep(2)
+
                     self.sock.close()
                     sys.exit(0)
 
@@ -2357,7 +2392,8 @@ class Repeater:
 
             r, w, e = self.select_wrapper(self.write_end)
 
-            # print_red_bright("DEBUG: sockets: r %s, w %s, e %s" % (str(r), str(w), str(e)))
+            if r or e or not w:
+                debuk("DEBUG: sockets: r %s, w %s, e %s" % (str(r), str(w), str(e)))
 
             if self.sock in r and not self.send_aligned():
 
@@ -2367,6 +2403,11 @@ class Repeater:
                     print_red_bright("#--> connection closed by peer")
                     if self.exitoneot:
                         print_red("Exiting on EOT")
+
+                        # clean up death timer
+                        if self.deathhand:
+                            self.die_after = -10
+
                         if not self.is_udp:
                             self.sock.shutdown(socket.SHUT_WR)
                         self.sock.close()
@@ -2730,7 +2771,10 @@ def main():
 
     prot.add_argument('--version', required=False, action='store_true', help='just print version and terminate')
     var.add_argument('--exitoneot', required=False, action='store_true',
-                     help='If there is nothing left to send and receive, terminate. Effective only in --client mode.')
+                     help='If there is nothing left to send and receive, terminate.')
+
+    var.add_argument('--die-after', nargs=1, required=False,
+                     help='Simply bail it out once specified amount of seconds passed.')
 
     var.add_argument('--exitondiff', required=False, action='store_true',
                      help='print error and exit if unexpected data is received')
@@ -3118,6 +3162,8 @@ def main():
 
                     if my_source:
 
+                        client = None
+                        stdout = None
                         try:
                             paramiko.util.log_to_file('/dev/null')
                             from paramiko.ssh_exception import SSHException, AuthenticationException
@@ -3172,7 +3218,7 @@ def main():
                             # FIXME: not sure about this. Don't assume what user really wants to do
                             # cmd += " --exitoneot"
 
-                            # print_red("sending cmd: " + cmd)
+                            debuk("sending cmd: " + cmd)
 
                             #
                             # chan.set_environment_variable(name="PPLAY_COLORAMA",value="1")
@@ -3214,10 +3260,16 @@ def main():
                         except KeyboardInterrupt as e:
                             print_red_bright("remote-ssh[local]: Ctrl-C: bailing, terminating remote-ssh.")
 
+                        except socket.error as e:
+                            print_red_bright("remote-ssh[local]: socket error")
                         finally:
-                            client.close()
+                            if client:
+                                client.close()
 
                         print_red("--- REMOTE OUTPUT END ---")
+
+                        if stdout:
+                            stdout.flush()
 
                         sys.exit(0)
                     else:
@@ -3281,10 +3333,15 @@ def main():
                 if len(args.client) > 0:
                     repeater.custom_ip = args.client[0]
 
+                if args.die_after:
+                    repeater.die_after = int(args.die_after[0])
+
                 repeater.impersonate('client')
 
             elif args.server:
 
+                if args.die_after:
+                    repeater.die_after = int(args.die_after[0])
 
                 if len(args.server) > 0:
                     # arg type is '?' so no list there, just string
@@ -3308,9 +3365,14 @@ def cleanup():
         except OSError as e:
             pass
 
+    g_delete_files.clear()
 
 import atexit
 
 if __name__ == "__main__":
     atexit.register(cleanup)
-    main()
+
+    try:
+        main()
+    except socket.error as e:
+        print_red("socket error: " + str(e))
