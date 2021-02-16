@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 
-import sys
-import os
-import socket
-import time
-import difflib
-import re
 import argparse
-import fileinput
+import atexit
 import binascii
 import datetime
-import tempfile
-import json
+import difflib
+import fileinput
 import hashlib
+import json
+import os
+import re
+import socket
 import struct
+import sys
+import tempfile
 import threading
-
+import time
 from select import select
 
 
@@ -45,6 +45,7 @@ class Features:
 
     scatter_prng = None
 
+
 pplay_version = "2.0.8"
 
 # EMBEDDED DATA BEGIN
@@ -71,7 +72,7 @@ try:
 except ImportError as e:
     print('== No scapy, pcap files not supported.', file=sys.stderr)
 
-## try to import colorama, indicate with have_ variable
+# try to import colorama, indicate with have_ variable
 try:
     import colorama
     from colorama import Fore, Back, Style
@@ -129,16 +130,17 @@ except ImportError as e:
 
 try:
     import sctp
+
     Features.have_sctp = True
 except ImportError as e:
     print('== no sctp support', file=sys.stderr)
 
 try:
     import platform
+
     host_platform = platform.system()
 except ImportError as e:
     print('== cannot detect your OS', file=sys.stderr)
-
 
 
 def help_sctp():
@@ -162,13 +164,13 @@ def str_time():
     failed = False
     try:
         t = datetime.now()
-    except AttributeError as e:
+    except AttributeError:
         failed = True
 
     if not t and failed:
         try:
             t = datetime.datetime.now()
-        except Exception as e:
+        except Exception:
             t = "<?>"
 
     return socket.gethostname() + "@" + str(t)
@@ -229,11 +231,13 @@ def print_white(what):
     else:
         print(what, file=sys.stderr)
 
+
 def print_blue(what):
     if Features.have_colorama:
         print(Fore.BLUE + what + Style.RESET_ALL, file=sys.stderr)
     else:
         print(what, file=sys.stderr)
+
 
 def print_blue_bright(what):
     if Features.have_colorama:
@@ -367,20 +371,30 @@ class SxyCA:
                 r[k] = {}
 
         for k in ["ca", "srv", "clt", "prt"]:
-            if "ou" not in r[k]: r[k]["ou"] = SxyCA.pref_choice(ou)
-            if "o" not in r[k]:  r[k]["o"] = SxyCA.pref_choice("Smithproxy Software")
-            if "s" not in r[k]:  r[k]["s"] = SxyCA.pref_choice(s)
-            if "l" not in r[k]:  r[k]["l"] = SxyCA.pref_choice(l)
-            if "c" not in r[k]:  r[k]["c"] = SxyCA.pref_choice("CZ", c)
+            if "ou" not in r[k]:
+                r[k]["ou"] = SxyCA.pref_choice(ou)
+            if "o" not in r[k]:
+                r[k]["o"] = SxyCA.pref_choice("Smithproxy Software")
+            if "s" not in r[k]:
+                r[k]["s"] = SxyCA.pref_choice(s)
+            if "l" not in r[k]:
+                r[k]["l"] = SxyCA.pref_choice(l)
+            if "c" not in r[k]:
+                r[k]["c"] = SxyCA.pref_choice("CZ", c)
 
-        if "cn" not in r["ca"]:   r["ca"]["cn"] = SxyCA.pref_choice(def_subj_ca, "Smithproxy Root CA")
-        if "cn" not in r["srv"]:  r["srv"]["cn"] = SxyCA.pref_choice(def_subj_srv, "Smithproxy Server Certificate")
-        if "cn" not in r["clt"]:  r["clt"]["cn"] = SxyCA.pref_choice(def_subj_clt, "Smithproxy Client Certificate")
-        if "cn" not in r["prt"]:  r["prt"]["cn"] = "Smithproxy Portal Certificate"
+        if "cn" not in r["ca"]:
+            r["ca"]["cn"] = SxyCA.pref_choice(def_subj_ca, "Smithproxy Root CA")
+        if "cn" not in r["srv"]:
+            r["srv"]["cn"] = SxyCA.pref_choice(def_subj_srv, "Smithproxy Server Certificate")
+        if "cn" not in r["clt"]:
+            r["clt"]["cn"] = SxyCA.pref_choice(def_subj_clt, "Smithproxy Client Certificate")
+        if "cn" not in r["prt"]:
+            r["prt"]["cn"] = "Smithproxy Portal Certificate"
 
-        if "settings" not in r["ca"]: r["ca"]["settings"] = {
-            "grant_ca": "false"
-        }
+        if "settings" not in r["ca"]:
+            r["ca"]["settings"] = {
+                "grant_ca": "false"
+            }
 
         debuk("config to be written: %s" % (r,))
 
@@ -639,7 +653,7 @@ class BytesGenerator:
         for i in self.state:
             rep += int(i)
 
-        #self._strengthen(rep)
+        # self._strengthen(rep)
 
         self.pool = b''
         # update with one bock
@@ -834,7 +848,6 @@ class Repeater:
         self.total_packet_index = 0
         self.read_packet_counter = 0
 
-
     # write @txt to temp file and return its full path
     def deploy_tmp_file(self, text):
         h, fnm = tempfile.mkstemp()
@@ -935,7 +948,6 @@ class Repeater:
             else:
                 proto = "Unknown"
 
-
             # Unknown
             if proto == "Unknown":
                 continue
@@ -1031,14 +1043,13 @@ class Repeater:
         for i in range(0, len(self.scripter.packets)):
             try:
                 new_data.append(
-                        bytes(Features.fuzz_prng.taint_bytes(self.scripter.packets[i], ceil=Features.fuzz_level))
+                    bytes(Features.fuzz_prng.taint_bytes(self.scripter.packets[i], ceil=Features.fuzz_level))
                 )
             except KeyError:
                 debuk("what? missing some indexes in data, very weird!")
 
         self.scripter.packets = new_data
         self.packets = new_data
-
 
     def list_gencap(self, to_print=True):
         gen = BytesGenerator(self.fnm, hashlib.sha256())
@@ -1063,10 +1074,11 @@ class Repeater:
 
         packets = rdpcap(self.fnm)
 
-        debuk("read_pcap: Looking for client connection %s:%s" % (im_ip,im_port))
+        debuk("read_pcap: Looking for client connection %s:%s" % (im_ip, im_port))
 
         for packet in packets:
 
+            l3_layer = None
             if packet.haslayer(IP):
                 l3_layer = IP
             elif packet.haslayer(IPv6):
@@ -1090,7 +1102,6 @@ class Repeater:
                 elif packet[l3_layer].haslayer(SCTP):
                     sport = str(packet[l3_layer][SCTP].sport)
                     dport = str(packet[l3_layer][SCTP].dport)
-
 
             except IndexError as e:
                 debuk("layer not found")
@@ -1253,11 +1264,11 @@ class Repeater:
                     fin.close()
 
                     n = sip.find("_")
-                    if n >= 0 and n < len(sip) - 1:
+                    if 0 <= n < len(sip) - 1:
                         sip = sip[n + 1:]
 
                     n = dip.find("_")
-                    if n >= 0 and n < len(dip) - 1:
+                    if 0 <= n < len(dip) - 1:
                         dip = dip[n + 1:]
 
                     if args:
@@ -1406,7 +1417,7 @@ class Repeater:
     def impersonate(self, who):
 
         if self.die_after > 0:
-            self.deathhand = threading.Thread(target=Repeater.killer_is_me, args=(self, ))
+            self.deathhand = threading.Thread(target=Repeater.killer_is_me, args=(self,))
             self.deathhand.start()
 
         if who == "client":
@@ -1625,7 +1636,7 @@ class Repeater:
                     new_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         if not is_client and not self.is_udp:
-                new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         return new_socket
 
@@ -1663,7 +1674,6 @@ class Repeater:
             if im_ver == 6:
                 print_ip = "[" + print_ip + "]"
             print_white_bright("IMPERSONATING CLIENT, connecting to %s:%s" % (print_ip, port,))
-
 
             new_socket = None
 
@@ -1824,7 +1834,7 @@ class Repeater:
                 self.reset()
                 print_white("waiting for new connection...")
 
-                conn,  client_address = self.accept(s)
+                conn, client_address = self.accept(s)
 
                 # flush stdin before real commands are inserted
                 sys.stdin.flush()
@@ -1880,7 +1890,7 @@ class Repeater:
         if self.is_sctp and not self.use_ssl:
             xp = pending
             if pending == 0:
-                xp = 20*1024
+                xp = 20 * 1024
             fromaddr, flags, msg, notif = self.sock.sctp_recv(xp)
 
             return msg
@@ -1905,14 +1915,14 @@ class Repeater:
                         pen = 10240
 
                     to_read = min(pen, cur_data_left)
-                    debuk("SSL: reading: %dB of data (stage 1)" % (to_read, ))
+                    debuk("SSL: reading: %dB of data (stage 1)" % (to_read,))
                     red = self.recv(to_read)
 
                     data += red
                     cur_data_left -= len(data)
 
                 except ssl.SSLError as e:
-                    debuk("read(): ssl error: %s" % (str(e), ))
+                    debuk("read(): ssl error: %s" % (str(e),))
                     # Ignore the SSL equivalent of EWOULDBLOCK, but re-raise other errors
 
                     if e.errno != ssl.SSL_ERROR_WANT_READ:
@@ -2065,7 +2075,6 @@ class Repeater:
 
         inputs = [self.sock, sys.stdin]
         if self.nostdin:
-
             # debuk("STDIN will not be used")
             inputs = [self.sock, ]
 
@@ -2148,13 +2157,13 @@ class Repeater:
                 print_red_bright("receiving timed out!")
                 break
 
-            data = self.read(self.get_expected_data_len()-len(d))
+            data = self.read(self.get_expected_data_len() - len(d))
             current_len = len(data)
             d += data
             len_d = len(d)
 
             if len_d < len_expected_data:
-                verbose("expecting: %dB more" % (len_expected_data - len_d, ))
+                verbose("expecting: %dB more" % (len_expected_data - len_d,))
         else:
             verbose("finished data: %d/%d" % (len_d, len_expected_data))
 
@@ -2189,14 +2198,16 @@ class Repeater:
 
                 if not host_platform or not host_platform.startswith("Windows"):
                     smatch = difflib.SequenceMatcher(None, bytes(d).decode("ascii", errors='ignore'),
-                                                     bytes(self.packets[self.total_packet_index-1]).decode("ascii",
-                                                                                                         errors='ignore'),
+                                                     bytes(self.packets[self.total_packet_index - 1]).decode("ascii",
+                                                                                                             errors='ignore'),
                                                      autojunk=False)
                     qr = smatch.ratio()
                     if qr > 0.05:
-                        print_red_bright("# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
+                        print_red_bright(
+                            "# !!! %s received %sB modified (%.1f%%)%s" % (str_time(), len(d), qr * 100, scripter_flag))
                     else:
-                        print_red_bright("# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
+                        print_red_bright(
+                            "# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
                 else:
                     print_red_bright("# !!! %s received %sB of different data%s" % (str_time(), len(d), scripter_flag))
 
@@ -2224,7 +2235,7 @@ class Repeater:
                 if Features.verbose:
                     print_yellow_bright("# !!! Expected data:")
                     # index-1, because we incremented it already
-                    print_yellow(hexdump(self.packets[self.total_packet_index-1]))
+                    print_yellow(hexdump(self.packets[self.total_packet_index - 1]))
 
                 if self.exitondiff:
                     print_red_bright("\n>>> Different data received, exiting.\n")
@@ -2623,6 +2634,7 @@ def print_ok_err(prefix, cond, true_string="OK", false_string="not present", fal
             suff = "    " + false_hint
         print_red(s + ": " + false_string + " " + suff)
 
+
 def print_version(verbose=False):
     print("")
     print_yellow_bright(title)
@@ -2642,12 +2654,14 @@ def print_version(verbose=False):
 
     print("")
 
+
 def print_overview():
     print_yellow(
         "\nOverview:\npplay is typically used as 2 running instances, one as a --server, and the other as a --client.")
-    print_yellow("Data are taken from ie. --pcap file.")
-    print_yellow("You probably want to run instances on different hosts, but with very same data.")
-    print_yellow("\nFor more options see --help\n .")
+    print_yellow("Replay data are taken from --pcap file, --smcap file or can be randomly generated with --gencap.")
+    print_yellow("You probably want to run two instances with the same replay data on two different hosts.")
+    print_yellow("\nFor more options see --help\n")
+
 
 def main():
     global g_script_module
@@ -2675,11 +2689,10 @@ def main():
     ds.add_argument('--fuzz-magic', nargs=1, help='specify fuzz magic seed to get different random bytes (default: "pplay").')
 
     ds.add_argument('--scatter', required=False, action='store_true',
-                      help='prng stream scattering - split segments into more payloads (noop for datagrams)')
+                    help='prng stream scattering - split segments into more payloads (noop for datagrams)')
 
     ds.add_argument('--scatter-magic', required=False, nargs=1,
-                      help='prng stream scattering - scatter magic seed (default: "pplay")')
-
+                    help='prng stream scattering - scatter magic seed (default: "pplay")')
 
     script_grp = group1.add_argument_group("Scripting options")
     script_grp.add_argument('--script', nargs=1,
@@ -2800,14 +2813,13 @@ def main():
         rem_ssh.add_argument('--remote-ssh-password', nargs=1,
                              help='SSH password. You can use SSH agent, too (so avoiding this option).')
 
-
     if Features.have_sctp:
         prot_sctp = parser.add_argument_group("SCTP options")
-        prot_sctp.add_argument("--sctp", required=False, action='store_true', help="Enable SCTP. Ccombine with --udp for datagram service, or --ssl for TLS over SCTP")
+        prot_sctp.add_argument("--sctp", required=False, action='store_true',
+                               help="Enable SCTP. Ccombine with --udp for datagram service, or --ssl for TLS over SCTP")
     else:
         prot_sctp = parser.add_argument_group("SCTP options (support not found)")
         prot_sctp.add_argument("--help-sctp", required=False, action='store_true', help="how to get sctp support")
-
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -3374,7 +3386,6 @@ def cleanup():
 
     g_delete_files.clear()
 
-import atexit
 
 if __name__ == "__main__":
     atexit.register(cleanup)
