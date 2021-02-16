@@ -2117,6 +2117,7 @@ class Repeater:
         debuk("packet_read: reading socket")
 
         d = self.read(self.get_expected_data_len())
+        current_len = len(d)
 
         debuk("packet_read: read returned %d" % len(d))
         if not len(d):
@@ -2131,7 +2132,10 @@ class Repeater:
         t_start = time.time()
 
         while len_d < len_expected_data:
-            verbose("incomplete data: %d/%d" % (len_d,len_expected_data))
+
+            if current_len != 0:
+                print_red("# ... %s: received partial %dB/%dB " % (str_time(), len(d), len_expected_data))
+            # verbose("incomplete data: %d/%d" % (len_d,len_expected_data))
             loopcount += 1
 
             delta = time.time() - t_start
@@ -2144,7 +2148,9 @@ class Repeater:
                 print_red_bright("receiving timed out!")
                 break
 
-            d += self.read(self.get_expected_data_len()-len(d))
+            data = self.read(self.get_expected_data_len()-len(d))
+            current_len = len(data)
+            d += data
             len_d = len(d)
 
             if len_d < len_expected_data:
