@@ -35,8 +35,7 @@ if(UNIX)
             PERMISSIONS 
                     OWNER_READ OWNER_WRITE OWNER_EXECUTE 
                     GROUP_READ GROUP_EXECUTE 
-                    WORLD_READ WORLD_EXECUTE 
-            RENAME pplay
+                    WORLD_READ WORLD_EXECUTE
     )
     install(FILES smcap2pcap DESTINATION bin 
             PERMISSIONS 
@@ -46,18 +45,18 @@ if(UNIX)
     )
     
     SET(CPACK_GENERATOR "DEB")
-    SET(MAJOR_VERSION 1)
-    SET(MINOR_VERSION 7)
-    SET(PATCH_VERSION 2)
+    SET(MAJOR_VERSION 2)
+    SET(MINOR_VERSION 0)
+    SET(PATCH_VERSION 9)
     SET(CPACK_PACKAGE_VERSION_MAJOR "${MAJOR_VERSION}")
     SET(CPACK_PACKAGE_VERSION_MINOR "${MINOR_VERSION}")
     SET(CPACK_PACKAGE_VERSION_PATCH "${PATCH_VERSION}")
     
-    SET(CPACK_PACKAGE_DESCRIPTION "pplay is packet payload replayer")
-    SET(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Pplay can resend .pcap and .smcap files over the network. It replays only TCP/UDP content (payload).")
+    SET(CPACK_PACKAGE_DESCRIPTION "pplay is network application payload replayer")
+    SET(CPACK_PACKAGE_DESCRIPTION_SUMMARY "pplay can resend application data from .pcap and .smcap files over the network.")
     SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "Ales Stibal <astib@mag0.net>")
-    SET(CPACK_DEBIAN_PACKAGE_DEPENDS "python (>=2.7)")
-    SET(CPACK_DEBIAN_PACKAGE_RECOMMENDS "python-scapy, python-colorama, python-paramiko, tcpdump")
+    SET(CPACK_DEBIAN_PACKAGE_DEPENDS "python3 (>=3.5), python3-scapy")
+    SET(CPACK_DEBIAN_PACKAGE_RECOMMENDS "tcpdump, python3-colorama, python3-paramiko, python3-requests, python3-cryptography")
     INCLUDE(CPack)    
     
     

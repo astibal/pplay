@@ -1,65 +1,136 @@
 #!/bin/sh
-FNM=$1
 OPATH="/tmp/"
-OFILE=`basename $FNM | sed -e "s/.smcap/.pcap/"`
-#OFILE=`mktemp smcap2pcap.XXXXX --suffix .pcap`
-O="${OPATH}${OFILE}"
-
 TCPDUMP=''
 PPLAYS=''
 PORT="0"
+PROG=$(which pplay.py)
+VERBOSE=0
+OUTPUT_FILE=''
 
+do_help() {
+  echo
+  echo "Script pplay to replay smcap and capture it with tcpdump into pcap"
+  echo
+  echo "  $0 --smcap <source> --pcap <destination> [--verbose]"
+  echo
+  echo "  --pcap option can be omitted, file will be saved to /tmp/ "
+  echo
+  echo "    Result: replayed traffic pcap filename is the only stdout output for scripting purposes"
+  echo "      Note: this tool must be able to listen on server port"
+  echo "   Warning: this tool is a hack, please always verify its results, it's by far not perfect"
+}
 
-(
-#O=`echo "$FNM" | sed -e "s/\.smcap/\.pcap/"`
-echo "output file: $O"
+debuk() {
+  if [ "$VERBOSE" = "1" ]; then
+    echo "$1 $2 $3 $4"
+  fi
+}
 
-PPORT=`pplay --smcap $FNM --smprint dport 2>&1 | grep -v "^WARNING"`
-echo "Detected destination port: $PPORT"
+errit() {
+  echo "$1 $2 $3 $4" > /dev/stderr
+}
 
+while [ $# -gt 0 ];
+do
+  case $1 in
+    --verbose|-v)
+      VERBOSE=1;;
 
-# detect colliding ports:
-RGX=`netstat -nap | grep 'LISTEN ' | grep '\(0.0.0.0\|127.0.0.2\):[0-9]\+' | awk '{ print $4 }' | sed -e 's/::/0/g' | awk -F: '{ print $2 }' | sort -n | uniq | tr '\n' '|' | sed -e 's/|/\\|/g' | sed -e 's/|$//'`
+    --smcap)
+      shift
+      FNM="$1";;
 
-PORT="$PPORT"
-while :; do
-    echo "$PORT" | egrep "$RGX"
-    if [ "$?" = "0" ] 
-    then
-        echo "port $PORT is in collision with already opened port"
-        PORT=$((1024 + `tr -cd 0-9 </dev/urandom | head -c 4`))
-    else
-        echo "using destination port '$PORT'"
-        break
-    fi
+    --pcap)
+      shift
+      OUTPUT_FILE="$1";;
+
+    --help|-h|*)
+      do_help
+      exit;;
+  esac
+  shift
 done
 
-# to zeroize $?
-echo 
-/usr/bin/pplay --server 127.0.0.2:$PORT  --smcap $FNM  --auto 0.1  --exitoneot --nostdin & #> /dev/null 2>&1 &
+if [ "$FNM" = "" ]; then
+  do_help
+  exit 255
+fi
 
-PPLAYS=$!
-PPLAYS_RET=$?
-echo "PPLAY SERVER RET" $PPLAYS_RET
-echo "PPLAY SERVER PID $PPLAYS"
+if [ ! -f "$FNM" ]; then
+  errit "smcap file doesn't exist"
+  exit 1
+fi
 
-sleep 0.5
+if [ "$OUTPUT_FILE" = "" ]; then
+  OFILE=$(basename "$FNM" | sed -e "s/.smcap/.pcap/")
+  OUTPUT_FILE="${OPATH}${OFILE}"
+fi
 
-tcpdump -i lo -n 'host 127.0.0.2' -s 20000 -w $O -U & #> /dev/null 2>&1 &
-TCPDUMP=$!
-echo "TCPDUMP PID $TCPDUMP"
-
-sleep 2;
-
-/usr/bin/pplay --client 127.0.0.2:$PORT  --smcap $FNM  --auto 0.1 --exitoneot --nostdin  #> /dev/null 2>&1
-# wait for it to finish
-
-sleep 2;
-
-kill -2 $TCPDUMP
-kill -9 $PPLAYS
-
-) > /tmp/smcap2pcap.log 2>&1
+if [ -f "$OUTPUT_FILE" ]; then
+  errit "pcap file '$OUTPUT_FILE' already exists"
+  exit 2
+fi
 
 
-echo -n $O
+do_run() {
+    echo "output file: $OUTPUT_FILE"
+
+    PPORT=$(${PROG} --smcap $FNM --smprint dport 2>&1 | grep -v "^WARNING")
+    echo "Detected destination port: $PPORT"
+
+
+    # detect colliding ports:
+    RGX=$(netstat -nap | grep 'LISTEN ' | grep '\(0.0.0.0\|127.0.0.2\):[0-9]\+' | awk '{ print $4 }' | sed -e 's/::/0/g' | awk -F: '{ print $2 }' | sort -n | uniq | tr '\n' '|' | sed -e 's/|/\\|/g' | sed -e 's/|$//')
+
+    PORT="$PPORT"
+    while :; do
+
+        if [ "$RGX" = "" ]; then
+          break
+        fi
+
+        echo "$PORT" | egrep "$RGX"
+        if [ "$?" = "0" ]
+        then
+            echo "port $PORT is in collision with already opened port"
+            INC=$(tr -cd 0-9 </dev/urandom | head -c 4)
+            PORT=$(1024 + INC)
+        else
+            echo "using destination port '$PORT'"
+            break
+        fi
+    done
+
+    # to zeroize $?
+    echo
+    ${PROG} --server 127.0.0.2:"$PORT"  --smcap "$FNM"  --auto 0.1  --exitoneot --nostdin --die-after 5 2>&1 | awk '{ print "server > ",$0}' &
+
+    PPLAYS=$!
+    PPLAYS_RET=$?
+    debuk "PPLAY SERVER RET" $PPLAYS_RET
+    debuk "PPLAY SERVER PID $PPLAYS"
+
+    sleep 0.5
+
+    tcpdump -i lo -n 'host 127.0.0.2' -s 20000 -w "$OUTPUT_FILE" -U 2>&1 | awk '{ print "tcpdump > ",$0}' &
+    TCPDUMP=$!
+    debuk "TCPDUMP PID $TCPDUMP"
+
+    sleep 2;
+
+    ${PROG} --client 127.0.0.2:"$PORT"  --smcap "$FNM"  --auto 0.1 --exitoneot --nostdin --die-after 5 2>&1 | awk '{ print "client > ",$0}'
+    # wait for it to finish
+
+    sleep 2;
+
+    kill -2 $TCPDUMP
+    kill -9 $PPLAYS
+}
+
+if [ "${VERBOSE}" = "1" ]; then
+  do_run
+else
+  (  do_run  ) > /tmp/smcap2pcap.log 2>&1
+fi
+
+echo "$OUTPUT_FILE"

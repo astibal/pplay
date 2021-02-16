@@ -46,7 +46,7 @@ class Features:
     scatter_prng = None
 
 
-pplay_version = "2.0.8"
+pplay_version = "2.0.9"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -170,7 +170,7 @@ def str_time():
     if not t and failed:
         try:
             t = datetime.datetime.now()
-        except Exception:
+        except AttributeError:
             t = "<?>"
 
     return socket.gethostname() + "@" + str(t)
@@ -1699,7 +1699,6 @@ class Repeater:
                 print_white_bright("   Connection to %s:%s failed: %s" % (ip, port, e))
                 print_white_bright(" === ")
                 return
-
 
         except KeyboardInterrupt as e:
             print_white_bright("\nCtrl-C: bailing it out.")
