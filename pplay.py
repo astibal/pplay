@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import socket
 import struct
 import sys
@@ -286,9 +287,11 @@ def colorize(s, keywords):
 # download file from HTTP and store it in /tmp/, add it to g_delete_files
 # so they are deleted at end of the program
 def http_download_temp(url):
-    r = requests.get(url, stream=True)
-    if not r:
-        print_red_bright("cannot download: " + url)
+    try:
+        r = requests.get(url, stream=True, timeout=(5, 60))
+        r.raise_for_status()
+    except requests.RequestException as e:
+        print_red_bright("cannot download %s: %s" % (url, e))
         sys.exit(1)
 
     local_filename = tempfile.mkstemp(prefix="pplay_dwn_")[1]
@@ -393,7 +396,7 @@ class SxyCA:
 
         if "settings" not in r["ca"]:
             r["ca"]["settings"] = {
-                "grant_ca": "false"
+                "grant_ca": False
             }
 
         debuk("config to be written: %s" % (r,))
@@ -420,6 +423,7 @@ class SxyCA:
             print(SxyCA.Options.indent * " " + "load_default_settings: exception caught: " + str(e))
 
     @staticmethod
+
     def generate_rsa_key(size):
         return rsa.generate_private_key(public_exponent=65537, key_size=size, backend=default_backend())
 
@@ -546,7 +550,7 @@ class SxyCA:
         builder = builder.subject_name(csr.subject)
 
         if not cacert:
-            builder = builder.issuer_name(x509.Name(construct_sn(caprofile)))
+            builder = builder.issuer_name(x509.Name(SxyCA.construct_sn(caprofile)))
         else:
             builder = builder.issuer_name(cacert.subject)
 
@@ -605,10 +609,14 @@ class SxyCA:
                 if e.value.ca:
                     if SxyCA.Options.debug: print((SxyCA.Options.indent + 2) * " " + "           CA=TRUE requested")
 
-                    if isca and not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                    grant_ca = SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]
+                    if isinstance(grant_ca, str):
+                        grant_ca = grant_ca.lower() in ("1", "true", "yes", "on")
+
+                    if isca and not grant_ca:
                         if SxyCA.Options.debug:
                             print((SxyCA.Options.indent + 2) * " " + "           CA not allowed but overridden")
-                    elif not SxyCA.SETTINGS["ca"]["settings"]["grant_ca"]:
+                    elif not grant_ca:
                         if SxyCA.Options.debug:
                             print((SxyCA.Options.indent + 2) * " " + "           CA not allowed by rule")
                         continue
@@ -1006,8 +1014,10 @@ class Repeater:
                         print_green(unique_ident)
             else:
                 if do_print and verbose:
-                    # Fore.RED + Style.BRIGHT + what + Style.RESET_ALL
-                    print_green(unique_ident + Fore.RED + " # %d simplex flows" % (len(ident[unique_ident]),))
+                    suffix = " # %d simplex flows" % (len(ident[unique_ident]),)
+                    if Features.have_colorama:
+                        suffix = Fore.RED + suffix
+                    print_green(unique_ident + suffix)
 
         if not candidate:
             print_red("no candidate, select yourself, please.")
@@ -1226,7 +1236,13 @@ class Repeater:
                     this_packet_origin = None
                     this_packet_index += 1
 
-    def smcap_convert_lines_to_bytes(this, list_of_ords):
+        # SMCAP files do not have to end with a blank/separator line.
+        if this_packet_bytes:
+            data = self.smcap_convert_lines_to_bytes(this_packet_bytes)
+            self.append_to_packets(this_packet_origin, data)
+
+    @staticmethod
+    def smcap_convert_lines_to_bytes(list_of_ords):
         bytes = b''
 
         for l in list_of_ords:
@@ -1315,7 +1331,6 @@ class Repeater:
                     out += ssource
                     out += "\n"
 
-                    import hashlib
                     out += "pplay_version = \"" + str(pplay_version) + "-" + hashlib.sha1(
                         ssource.encode('utf-8')).hexdigest() + "\"\n"
 
@@ -1390,9 +1405,8 @@ class Repeater:
 
             return c
         else:
-            f = open(efile, 'w')
-            f.write(c.decode('utf-8'))
-            f.close()
+            with open(efile, 'w', encoding='utf-8') as f:
+                f.write(c)
 
         return None
 
@@ -1558,7 +1572,6 @@ class Repeater:
             self.ssl_context.keylog_file = "/tmp/sslkeys"
         except AttributeError as e:
             print_red("no sslkeylogfile support")
-            pass
 
         if self.ssl_cipher:
             self.ssl_context.set_ciphers(self.ssl_cipher)
@@ -1918,7 +1931,7 @@ class Repeater:
                     red = self.recv(to_read)
 
                     data += red
-                    cur_data_left -= len(data)
+                    cur_data_left -= len(red)
 
                 except ssl.SSLError as e:
                     debuk("read(): ssl error: %s" % (str(e),))
@@ -1942,7 +1955,7 @@ class Repeater:
                         break
 
                     data += red
-                    cur_data_left -= len(data)
+                    cur_data_left -= len(red)
 
                 # if we got here, break (we have all data we wanted)
                 break
@@ -1987,6 +2000,8 @@ class Repeater:
             while already_written < data_len:
 
                 r = self.send(data[already_written:])
+                if r == 0:
+                    raise ConnectionError("socket connection broken during write")
                 already_written += r
 
                 # print warning
@@ -2000,6 +2015,8 @@ class Repeater:
             if not self.is_udp:
                 while already_written < data_len:
                     r = self.send(data[already_written:])
+                    if r == 0:
+                        raise ConnectionError("socket connection broken during write")
                     already_written += r
 
                     if r != data_len:
@@ -2021,6 +2038,21 @@ class Repeater:
     def send_to_send(self):
 
         if self.to_send:
+            orig_index = self.packet_index
+
+            if self.scripter:
+                try:
+                    modified = self.scripter.before_send(self.whoami, orig_index, str(self.to_send))
+                except AttributeError:
+                    modified = None
+
+                if modified is not None:
+                    print_yellow_bright("# data modified by script!")
+                    if isinstance(modified, str):
+                        modified = modified.encode("utf-8")
+                    self.to_send = bytes(modified)
+
+            been_sent = self.to_send
             self.packet_index += 1
             self.total_packet_index += 1
 
@@ -2057,6 +2089,12 @@ class Repeater:
                 total_written += cnt
 
             self.to_send = None
+
+            if self.scripter:
+                try:
+                    self.scripter.after_send(self.whoami, orig_index, str(been_sent))
+                except AttributeError:
+                    pass
 
     def detect_parent_death(self):
         # mypid = os.getpid()
@@ -2192,7 +2230,7 @@ class Repeater:
 
             else:
                 self.total_packet_index += 1
-                print_red_bright("# !!! /!\ DIFFERENT DATA /!\ !!!")
+                print_red_bright(r"# !!! /!\ DIFFERENT DATA /!\ !!!")
                 different = True
 
                 if not host_platform or not host_platform.startswith("Windows"):
@@ -2331,27 +2369,8 @@ class Repeater:
                         if Features.option_auto_send >= 2:
                             print_green_bright("  ... sending!")
 
-                        been_sent = self.to_send
-                        orig_index = self.packet_index
-
-                        if self.scripter:
-                            try:
-                                to_send_2 = self.scripter.before_send(self.whoami, self.packet_index, str(self.to_send))
-
-                            except AttributeError:
-                                # scripter doesn't have before_send implemented
-                                pass
-
                         self.send_to_send()
                         self.auto_send_now = now
-
-                        if self.scripter:
-                            try:
-                                self.scripter.after_send(self.whoami, orig_index, str(been_sent))
-
-                            except AttributeError:
-                                # scripter doesn't have after_send implemented
-                                pass
 
     def packet_loop(self):
 
@@ -2434,10 +2453,6 @@ class Repeater:
                     # on data: reset ctrc_count for connectionless ... connections :-)
                     self.ctrc_count = 0
 
-            if self.sock in w:
-                if not self.write_end:
-                    self.packet_write(cmd_hook=(sys.stdin in r))
-
             if self.write_end and sys.stdin in r:
                 l = sys.stdin.readline()
                 if len(l) > 0:
@@ -2456,7 +2471,11 @@ class Repeater:
             parts = command.split(command[1])
             # print_yellow(str(parts))
             if len(parts) == 4:
-                return re.sub(parts[1], parts[2], str(data), int(parts[3]), flags=re.MULTILINE)
+                source = data.decode("latin-1") if isinstance(data, bytes) else str(data)
+                replaced = re.sub(
+                    parts[1], parts[2], source, count=int(parts[3]), flags=re.MULTILINE
+                )
+                return replaced.encode("latin-1")
             else:
                 print_yellow("Syntax error: please follow this pattern:")
                 print_yellow("    r<delimiter><original><delimiter><replacement><delimiter><number_of_replacements>")
@@ -2475,8 +2494,8 @@ class Repeater:
             "%% Enter new payload line by line (empty line commits). Lines will be sent out separated by CRLF.")
         l = sys.stdin.readline()
 
-        while len(l) > 0:
-            nd += l.strip() + "\r\n"
+        while l not in ("", "\n", "\r\n"):
+            nd += l.rstrip("\r\n") + "\r\n"
             nl += 1
             l = sys.stdin.readline()
 
@@ -2484,7 +2503,7 @@ class Repeater:
             print_yellow_bright("%% %d lines (%d bytes)" % (nl, len(nd)))
         else:
             print_yellow_bright("%% empty string - ignored")
-        return nd
+        return nd.encode("utf-8")
 
     def process_command(self, l, mask):
 
@@ -2511,17 +2530,17 @@ class Repeater:
 
             elif l.startswith('c'):
                 self.to_send = None  # to reinit and ask again
-                cnt = self.write("\n")
-                print_green_bright("# %s custom '\\n' payload (%d bytes) inserted" % (str_time(), cnt,))
+                cnt = self.write(b"\r")
+                print_green_bright("# %s custom '\\r' payload (%d bytes) inserted" % (str_time(), cnt,))
 
             elif l.startswith('l'):
                 self.to_send = None  # to reinit and ask again
-                cnt = self.write("\r")
-                print_green_bright("# %s custom '\\r' payload (%d bytes) inserted" % (str_time(), cnt,))
+                cnt = self.write(b"\n")
+                print_green_bright("# %s custom '\\n' payload (%d bytes) inserted" % (str_time(), cnt,))
 
             elif l.startswith('x'):
                 self.to_send = None  # to reinit and ask again
-                cnt = self.write("\r\n")
+                cnt = self.write(b"\r\n")
                 print_green_bright("# %s custom '\\r\\n' payload (%d bytes) inserted" % (str_time(), cnt,))
 
             elif l.startswith('r') or l.startswith('N'):
@@ -2580,7 +2599,6 @@ class Repeater:
             except ValueError:
                 print_red("fuzz-level value supposed to be integer between 0 and 255, using default %d"
                           % Features.fuzz_level)
-                pass
 
             self.fuzz = True
 
@@ -2693,11 +2711,10 @@ def main():
     ds.add_argument('--scatter-magic', required=False, nargs=1,
                     help='prng stream scattering - scatter magic seed (default: "pplay")')
 
-    script_grp = group1.add_argument_group("Scripting options")
-    script_grp.add_argument('--script', nargs=1,
-                            help='load python script previously generated by --export command, '
-                                 'OR use + to indicate script is embedded into source. See --pack option.')
-    script_grp.add_argument('--script-args', nargs=1, help='pass string to the script args')
+    group1.add_argument('--script', nargs=1,
+                        help='load python script previously generated by --export command, '
+                             'OR use + to indicate script is embedded into source. See --pack option.')
+    ds.add_argument('--script-args', nargs=1, help='pass string to the script args')
 
     ac = parser.add_argument_group("Actions")
     group2 = ac.add_mutually_exclusive_group()
@@ -3084,10 +3101,10 @@ def main():
                 repeater.ssl_key = args.key[0]
 
             if Features.have_crypto:
-                if args.ca_cert:
+                if args.cacert:
                     repeater.ssl_ca_cert = args.cacert[0]
 
-                if args.ca_key:
+                if args.cakey:
                     repeater.ssl_ca_key = args.cakey[0]
 
             export_file = args.export[0]
@@ -3227,7 +3244,7 @@ def main():
                                     filter_next = True
                                     continue
 
-                                cmd += " " + arg
+                                cmd += " " + shlex.quote(arg)
 
                             # don't monitor stdin (it's always readable over SSH)
                             # exit on the end of replay transmission --remote-ssh is intended to one-shot tests anyway
@@ -3321,13 +3338,13 @@ def main():
             elif args.auto:
                 Features.option_auto_send = args.auto
 
-                if args.nostdin:
-                    print_red_bright("stdin will be unmonitored")
-                    repeater.nostdin = True
-
             else:
                 # Features.option_auto_send = 5
                 pass
+
+            if args.nostdin:
+                print_red_bright("stdin will be unmonitored")
+                repeater.nostdin = True
 
             if args.nohex:
                 repeater.nohexdump = True
