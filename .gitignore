@@ -1,0 +1,10 @@
+.idea/
+build/
+cmake-build-debug/
+dist/
+*.egg-info/
+sslca/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/

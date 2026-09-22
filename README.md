@@ -1,15 +1,38 @@
-# Support #
-For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.  
-If you can make use of .deb package, visit [download section](https://bitbucket.org/astibal/pplay/downloads/) of this site.
+# What is pplay
+> Pplay is a tool which takes application data from network capture and resends it back over the network via user-defined connection.
+>
+> It supports `.pcap` and `.smcap` files or *fuzzy* generator as an input data, and send payload via TCP, TLS, UDP and SCTP.
+> Pplay can upgrade socket to TLS at any moment. It also supports SOCKS5 for client connections.
+>
+> Typically, you need to run `pplay` **server** and **client** side instances with the same input data parameters.
+> PPlay is capable to *worm* self to testing hosts via SSH, so you actually don't need to copy anything.
+>
+> Pplay is available as a pypi package:
+> ```shell
+> # pip install pplay
+> ```
 
-# History #
 
-recently I've been in the need of reproducing some issue with DLP, while I was provided with pcap when DLP was not involved in the traffic flow and everything was working.
-Orignally I was trying to utilize netcat, however I've always ended up with some (my) mistake, or simply I just sent CR when it should have been CRLF... Reproduction was frankly tedious task.
+# Support
+For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.
+If you require .deb package, visit [github releases page](https://github.com/astibal/pplay/releases).
 
-Then I gave up on manual work, and tried tcpreplay. This is really fantastic tool in case you want to replay *exactly* what you have in pcap. However I quickly realized that DLP is changing sequential numbers of inspected TCP traffic, so it couldn't have been used it too!! Looking around the net, I decided to write something myself which will help me now and next time it can help others too. 
 
-# Quick start #
+# History
+I needed to reproduce some odd network behavior: I was provided with captures in pcap when everything was working and when not.
+Originally I was trying to utilize `netcat` to replay captures back over the network, but sadly always ended up with some mistake.
+With netcat is kind of manual labour, it's working only with ascii based data, while you still need to be aware of crlf issue.
+It was frankly very tedious task.
+
+Then I gave up on manual work, and tried `tcpreplay`. This is really fantastic tool in case you want to replay *exactly* what you have in pcap.
+However, I quickly realized that there is some proxy on the way which is changing TCP sequential numbers. Traffic therefore won't pass the proxy at all.
+
+I thought it would be nice to have a tool which won't bother with anything below application data and send only them. In that case we can define
+same source and destination ip and port, while content remains, making replaying via tcp proxies actually work.
+
+This is why I started `pplay` project.
+
+# Quick start
 
 PPlay is tool to replay/resend application data, it doesn't care of transport layer parameters (which we want, reasons described above). It will grab only the payload from connection you explicitly specify and will make new connection and plays the content in the right order. Of course, you will need to run pplay on server and on client too, with the same pcap file parameter and also with other quite important arguments.
 
@@ -18,7 +41,7 @@ All data about to be sent will be printed out to be confirmed by you. When recei
 Output is colored; RED means anything related to received stuff, GREEN everything to data to be sent, or YELLOW for command line and other data eligible to be sent in the future but not now. WHITE is usually program notifications. At the first sight pplay's output might look bit a messy, but colors really help.
 
 
-# Replaying PCAP #
+# Replaying PCAP
 
 #### List connections you have available
 ```
@@ -28,7 +51,7 @@ $ pplay.py --pcap samples/post-chunked-response.pcap --list
 192.168.132.1:80 -> 10.0.0.20:59471 (starting at frame 1)
 ```
 
-#### Run server side pplay instance 
+#### Run server side pplay instance
 ```
 $ ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471
 ```
@@ -43,7 +66,7 @@ $ ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 -
 #### Run server pplay instance
 ```
 $ sudo ./pplay.py  --server 127.0.0.2:9999 --smcap samples/smcap_sample.smcap  --ssl
-                            listen on this IP:PORT                             optionally wrap it with SSL 
+                            listen on this IP:PORT                             optionally wrap it with SSL
 ```
 
 #### Run client pplay instance
@@ -68,7 +91,7 @@ Template python script has been exported to file stuff.py
 #### You can use "script" as the sniff file (NOTE: missing .py in --script argument)
 ```
 $ ./pplay.py --script stuff --server 127.0.0.2:9999
-$ ./pplay.py --script stuff --client 127.0.0.2:9999 
+$ ./pplay.py --script stuff --client 127.0.0.2:9999
 ```
 
 
@@ -119,12 +142,12 @@ As you might see this gives to your hands power to export existing payload with 
 
 
 # Creating and using self-contained package #
-This feature is extremely useful for automation. You can use SMCAP, PCAP or pplayscript, embed it into pplay itself, 
-and use this self-contained pplay version by executing it over the SSH (or the other way, SSH is just the most obvious). 
+This feature is extremely useful for automation. You can use SMCAP, PCAP or pplayscript, embed it into pplay itself,
+and use this self-contained pplay version by executing it over the SSH (or the other way, SSH is just the most obvious).
 
 The rest is just the same normal pplay. Please note that pplay over ssh needs a bit different approach, so we execute it with:
 
-*  --nostdin - (it's already used by SSH) 
+*  --nostdin - (it's already used by SSH)
 *  --auto - will make transaction waiting times a fraction of second
 *  --script +     this will instruct to *play embedded pplayscript**
 *  --exitoneot  - once we received/sent last message in the transaction, exit.
@@ -155,7 +178,7 @@ Yellow or green, pplay will act on behalf of you by default in 5 seconds => gree
 Hint: you can set --noauto, or --auto <big_seconds> program argument to change autosend feature. This feature could be also toggled on/off during the operation with "i" command shortcut.
 
 
-## Launch on remote SSH server 
+## Launch on remote SSH server
 
 **new in version 1.7.0**
 You have learned so far how to "pack" data inside *pplay*. It's pretty useful, but you need to always *--pack*, create a file, send it to the other side, and execute there.
@@ -163,7 +186,7 @@ Even though in previous examples we mentioned how to send *pack*ed over ssh stdi
 Since version 1.7.0 you can actually utilize --remote-ssh parameter, and pplay will send over ssh itself!
 
 ```
-# this will run pplay on remote server, listening there on port 8000, packing all data needed to impersonate 
+# this will run pplay on remote server, listening there on port 8000, packing all data needed to impersonate
 # server from pcap file
 
 pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --server 8000 --remote-ssh 12.13.14.15:2222 \
@@ -173,7 +196,7 @@ pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --server 8000 --remote
 ```
 # this will run pplay on remote server, impersonating client, packing all data needed from pcap file
 
-pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --client 12.13.14.15:8000 \ 
+pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --client 12.13.14.15:8000 \
     --remote-ssh 12.13.14.88:2222 --exitoneot --auto 0.1
 ```
 
@@ -183,7 +206,7 @@ Nice on this is you don't need anything on remote servers, just pure python. Not
 
 
 ## Connect client using SOCKS
-Another useful feature might be to use proxy for client outgoing connection (perhaps you are testing such a proxy, like I am).  
+Another useful feature might be to use proxy for client outgoing connection (perhaps you are testing such a proxy, like I am).
 To do so, use --socks parameter, taking IP address optionally suffixed with a port, ie. 10.0.0.1:1080
 
 ## Commands ##
@@ -195,8 +218,8 @@ Below hex data (green or yellow), there is some contextual help for you: pplay i
     "l" to send LF only
     "x" to send CR+LF characters
     "i" to disable/enable autosend feature
-    "r" command to replace content of the payload with something else. 
-        It does have 'vi'-like syntax: r/POST/GET/0 will replace string "POST" with "GET". 
+    "r" command to replace content of the payload with something else.
+        It does have 'vi'-like syntax: r/POST/GET/0 will replace string "POST" with "GET".
         Trailing number means max. number of replacements, 0=all
 
 ## Data sources ##
@@ -218,7 +241,32 @@ I would recommend to run pplay in linux, I haven't tested it on Windows yet.
 
 
 
-# SMCAP2PCAP tool
-This tool is a bit hack. Basically it replays smcap file, while using tcpdump to sniff the traffic. There are dozens of reasons why you would like to convert smcap file to pcap. This is the tool for that purpose.
+# smcap2pcap tool
+This tool is a bit hack. Basically it replays smcap file, while using tcpdump to sniff the traffic.
+There are dozens of reasons why you would like to convert smcap file to pcap. This is the tool for that purpose.
 
-Also, this tools is very basic. There is only argument it takes: smcap file. Name and location of the converted pcap will be printed out.
+
+Help printout should give you an idea:
+```
+Script pplay to replay smcap and capture it with tcpdump into pcap
+
+  ./smcap2pcap --smcap <source> --pcap <destination> [--verbose]
+
+  --pcap option can be omitted, file will be saved to /tmp/
+
+    Result: replayed traffic pcap filename is the only stdout output for scripting purposes
+      Note: this tool must be able to listen on server port
+   Warning: this tool is a hack, please always verify its results, it's by far not perfect
+```
+
+### Note
+`smcap2pcap` can run since 2.0.9 happily in the separate network namespace:
+
+Example (run as root):
+```
+ip netns add s2p
+ip netns exec s2p ip link set lo up
+ip netns exec s2p ./smcap2pcap --smcap samples/smcap_sample.smcap --pcap /tmp/c.pcap
+ip netns delete s2p
+```
+This is even recommendable, as the network stack is empty and no port conflicts should happen.
