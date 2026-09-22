@@ -3,9 +3,21 @@ OPATH="/tmp/"
 TCPDUMP=''
 PPLAYS=''
 PORT="0"
-PROG=$(which pplay.py)
+PROG=$(command -v pplay.py)
+if [ -z "$PROG" ]; then
+  PROG="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/pplay.py"
+fi
 VERBOSE=0
 OUTPUT_FILE=''
+SERVER_LOG=$(mktemp /tmp/smcap2pcap-server.XXXXXX)
+TCPDUMP_LOG=$(mktemp /tmp/smcap2pcap-tcpdump.XXXXXX)
+
+cleanup() {
+  [ -n "$TCPDUMP" ] && kill -INT "$TCPDUMP" 2>/dev/null
+  [ -n "$PPLAYS" ] && kill "$PPLAYS" 2>/dev/null
+  rm -f "$SERVER_LOG" "$TCPDUMP_LOG"
+}
+trap cleanup EXIT INT TERM
 
 do_help() {
   echo
@@ -75,7 +87,11 @@ fi
 do_run() {
     echo "output file: $OUTPUT_FILE"
 
-    PPORT=$(${PROG} --smcap $FNM --smprint dport 2>&1 | grep -v "^WARNING")
+    PPORT=$("${PROG}" --smcap "$FNM" --smprint dport 2>&1 | awk '/^[0-9]+$/ { port=$0 } END { print port }')
+    if [ -z "$PPORT" ]; then
+      errit "cannot detect destination port"
+      return 3
+    fi
     echo "Detected destination port: $PPORT"
 
 
@@ -89,12 +105,11 @@ do_run() {
           break
         fi
 
-        echo "$PORT" | egrep "$RGX"
-        if [ "$?" = "0" ]
+        if echo "$PORT" | grep -Eq "^(${RGX})$"
         then
             echo "port $PORT is in collision with already opened port"
-            INC=$(tr -cd 0-9 </dev/urandom | head -c 4)
-            PORT=$(1024 + INC)
+            INC=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+            PORT=$((1024 + INC % 64512))
         else
             echo "using destination port '$PORT'"
             break
@@ -103,7 +118,7 @@ do_run() {
 
     # to zeroize $?
     echo
-    ${PROG} --server 127.0.0.2:"$PORT"  --smcap "$FNM"  --auto 0.1  --exitoneot --nostdin --die-after 5 2>&1 | awk '{ print "server > ",$0}' &
+    "${PROG}" --server 127.0.0.2:"$PORT" --smcap "$FNM" --auto 0.1 --exitoneot --nostdin --die-after 5 >"$SERVER_LOG" 2>&1 &
 
     PPLAYS=$!
     PPLAYS_RET=$?
@@ -112,7 +127,7 @@ do_run() {
 
     sleep 0.5
 
-    tcpdump -i lo -n 'host 127.0.0.2' -s 20000 -w "$OUTPUT_FILE" -U 2>&1 | awk '{ print "tcpdump > ",$0}' &
+    tcpdump -i lo -n 'host 127.0.0.2' -s 20000 -w "$OUTPUT_FILE" -U >"$TCPDUMP_LOG" 2>&1 &
     TCPDUMP=$!
     debuk "TCPDUMP PID $TCPDUMP"
 
@@ -123,14 +138,26 @@ do_run() {
 
     sleep 2;
 
-    kill -2 $TCPDUMP
-    kill -9 $PPLAYS
+    kill -INT "$TCPDUMP" 2>/dev/null
+    wait "$TCPDUMP" 2>/dev/null
+    TCPDUMP=''
+
+    kill "$PPLAYS" 2>/dev/null
+    wait "$PPLAYS" 2>/dev/null
+    PPLAYS=''
+
+    if [ "$VERBOSE" = "1" ]; then
+      sed 's/^/server > /' "$SERVER_LOG"
+      sed 's/^/tcpdump > /' "$TCPDUMP_LOG"
+    fi
 }
 
 if [ "${VERBOSE}" = "1" ]; then
   do_run
 else
-  (  do_run  ) > /tmp/smcap2pcap.log 2>&1
+  RUN_LOG=$(mktemp /tmp/smcap2pcap.XXXXXX)
+  ( do_run ) >"$RUN_LOG" 2>&1
+  rm -f "$RUN_LOG"
 fi
 
 echo "$OUTPUT_FILE"
