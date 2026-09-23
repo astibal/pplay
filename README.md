@@ -1,7 +1,12 @@
 # Pplay
 
-Pplay replays **application payloads** from a network capture over a new connection.
-It deliberately ignores original TCP sequence numbers, timing, and most lower-layer details. This makes it useful when a capture must be replayed through a proxy, a different network path, or a small test lab where packet-for-packet replay would not work.
+Pplay replays **application payloads** from a network capture over a new
+connection.
+
+It deliberately ignores original TCP sequence numbers, timing, and most
+lower-layer details. This makes it useful when a capture must be replayed
+through a proxy, a different network path, or a small test lab where
+packet-for-packet replay would not work.
 
 Its most useful features are:
 
@@ -10,6 +15,26 @@ Its most useful features are:
 - replay the client and server sides over TCP, TLS, UDP, or SCTP;
 - package Pplay and replay data into one self-contained Python file;
 - deploy and run that package on a remote host over SSH without installing Pplay there.
+
+```text
+capture.pcapng
+      │  --export
+      ▼
+ replay.py (PPlayScript)
+      │  --pack / --remote-ssh
+      ▼
+local or remote replay
+```
+
+## Contents
+
+- [Quick start with a PCAP](#quick-start-with-a-pcap)
+- [PPlayScript](#pplayscript)
+- [Self-contained replay](#self-contained-replay)
+- [SSH self-deployment](#ssh-self-deployment)
+- [TLS and STARTTLS](#tls-and-starttls)
+- [Useful options](#useful-options)
+- [Legacy SMCAP support](#legacy-smcap-support)
 
 ## Installation
 
@@ -28,7 +53,8 @@ Pplay is primarily developed and tested on Linux.
 
 ## How replay works
 
-A capture contains both directions of a conversation. Pplay extracts their payloads and keeps their order:
+A capture contains both directions of a conversation. Pplay extracts their
+payloads and keeps their order:
 
 ```text
 client payload  ──▶  server
@@ -36,9 +62,14 @@ client          ◀──  server payload
 client payload  ──▶  server
 ```
 
-Normally, run one Pplay instance as the server and another as the client. Both instances use the same capture or PPlayScript. Each side sends only the payloads assigned to its role and checks received data against the expected conversation.
+Normally, run one Pplay instance as the server and another as the client.
+Both instances use the same capture or PPlayScript. Each side sends only the
+payloads assigned to its role and checks received data against the expected
+conversation.
 
-Pplay reports received data as matching, modified, or different. By default it offers each aligned payload for several seconds before sending it automatically. Use `--auto`, `--noauto`, or the interactive commands to change that behavior.
+Pplay reports received data as matching, modified, or different. By default it
+offers each aligned payload for several seconds before sending it automatically.
+Use `--auto`, `--noauto`, or the interactive commands to change that behavior.
 
 ## Quick start with a PCAP
 
@@ -76,7 +107,14 @@ For a non-interactive one-shot replay, add:
 
 ## PPlayScript
 
-A PPlayScript is an editable Python representation of a conversation. It removes the capture dependency and provides hooks for dynamic payload generation, state tracking, STARTTLS, authentication tokens, timestamps, fuzzing logic, or protocol-specific behavior.
+A PPlayScript is an editable Python representation of a conversation.
+It removes the capture dependency and provides hooks for:
+
+- dynamic payload generation;
+- state tracking;
+- STARTTLS;
+- authentication tokens and timestamps;
+- fuzzing or protocol-specific behavior.
 
 Export a selected PCAP flow:
 
@@ -141,7 +179,9 @@ An optional string can be passed to the script constructor:
 pplay.py --script replay.py --script-args test-run-42 --client 127.0.0.1:9000
 ```
 
-See the [example scripts](https://github.com/astibal/pplay/tree/master/examples) for additional conversations.
+See the
+[example scripts](https://github.com/astibal/pplay/tree/master/examples)
+for additional conversations.
 
 ## Self-contained replay
 
@@ -214,13 +254,17 @@ pplay.py \
   --exitoneot
 ```
 
-SSH agent or key authentication is recommended. `--remote-ssh-password` exists for controlled test environments, but command-line passwords may be exposed through shell history or process inspection.
+SSH agent or key authentication is recommended. `--remote-ssh-password` exists
+for controlled test environments, but command-line passwords may be exposed
+through shell history or process inspection.
 
-The remote host needs only Python for a basic packed replay. Features used by a custom script may require their corresponding Python libraries.
+The remote host needs only Python for a basic packed replay. Features used by
+a custom script may require their corresponding Python libraries.
 
 ## TLS and STARTTLS
 
-Use `--ssl` to wrap a connection in TLS from the beginning. A server needs either an explicit certificate and key or a CA pair for dynamic certificates:
+Use `--ssl` to wrap a connection in TLS from the beginning. A server needs
+either an explicit certificate and key or a CA pair for dynamic certificates:
 
 ```shell
 pplay.py --script replay.py --server 9443 --ssl --cert server.pem --key server.key
@@ -233,7 +277,8 @@ A PPlayScript can switch an existing connection to TLS by calling:
 self.pplay.starttls()
 ```
 
-from the appropriate `before_send` or `after_send` hook. The repository contains a [STARTTLS example](https://github.com/astibal/pplay/blob/master/examples/smtp_starttls_pps.py).
+from the appropriate `before_send` or `after_send` hook. The repository contains
+a [STARTTLS example](https://github.com/astibal/pplay/blob/master/examples/smtp_starttls_pps.py).
 
 ## Useful options
 
@@ -249,11 +294,22 @@ from the appropriate `before_send` or `after_send` hook. The repository contains
 --tcp / --udp      override the transport detected in the capture
 ```
 
-Interactive commands include Enter/`y` to send, `s` to skip, `c` for CR, `l` for LF, `x` for CRLF, `i` to toggle autosend, and `r/old/new/count` to replace payload content.
+Interactive commands:
+
+```text
+Enter / y            send
+s                    skip
+c / l / x            send CR / LF / CRLF
+i                    toggle autosend
+r/old/new/count      replace payload content
+```
 
 ## Legacy SMCAP support
 
-SMCAP is the historical textual capture format produced by Smithproxy. Pplay still supports `--smcap` and the `smcap2pcap` compatibility utility, but new workflows should generally start from PCAP/PCAPNG or an exported PPlayScript.
+SMCAP is the historical textual capture format produced by Smithproxy.
+Pplay still supports `--smcap` and the `smcap2pcap` compatibility utility,
+but new workflows should generally start from PCAP/PCAPNG or an exported
+PPlayScript.
 
 ```shell
 pplay.py --smcap legacy.smcap --list
