@@ -17,25 +17,30 @@ class PPlayScript:
 
         print("pplayscript: %s" % self.args)
 
-        self.packets = ['200 PPlay SMTP Server\r\n',
-                        'EHLO A\r\n',
-                        '200 PPlay SMTP Server - nice to see you.\r\n',
-                        'STARTTLS\r\n',
-                        '200 ready to start TLS\r\n',
-                        'EHLO A\r\n',
-                        '200 PPlay SMTP Server\r\n',
-                        'MAIL FROM: a@b.c\r\n',
-                        '200 Go ahead\r\n',
-                        'MAIL TO: someone@here.local\r\n',
-                        '200 Go ahead\r\n',
-                        'DATA\r\n',
-                        '200 Go ahead\r\n',
-                        'Subject: is anybody out there\r\n',
-                        '\r\n\r\n.\n']
+        self.packets = [b'200 PPlay SMTP Server\r\n',
+                        b'EHLO A\r\n',
+                        b'200 PPlay SMTP Server - nice to see you.\r\n',
+                        b'STARTTLS\r\n',
+                        b'200 ready to start TLS\r\n',
+                        b'EHLO A\r\n',
+                        b'200 PPlay SMTP Server\r\n',
+                        b'MAIL FROM: a@b.c\r\n',
+                        b'200 Go ahead\r\n',
+                        b'MAIL TO: someone@here.local\r\n',
+                        b'200 Go ahead\r\n',
+                        b'DATA\r\n',
+                        b'200 Go ahead\r\n',
+                        b'Subject: is anybody out there\r\n',
+                        b'\r\n\r\n.\n']
 
         self.server_port = 0
+        self.custom_sport = None
         self.origins['client'] = [1, 3, 5, 7, 9, 11, 13, 14]
         self.origins['server'] = [0, 2, 4, 6, 8, 10, 12]
+        self.ssl_cert = None
+        self.ssl_key = None
+        self.ssl_ca_cert = None
+        self.ssl_ca_key = None
 
     def after_send(self, role, index, data):
 

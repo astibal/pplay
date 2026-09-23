@@ -1,272 +1,267 @@
-# What is pplay
-> Pplay is a tool which takes application data from network capture and resends it back over the network via user-defined connection.
->
-> It supports `.pcap` and `.smcap` files or *fuzzy* generator as an input data, and send payload via TCP, TLS, UDP and SCTP.
-> Pplay can upgrade socket to TLS at any moment. It also supports SOCKS5 for client connections.
->
-> Typically, you need to run `pplay` **server** and **client** side instances with the same input data parameters.
-> PPlay is capable to *worm* self to testing hosts via SSH, so you actually don't need to copy anything.
->
-> Pplay is available as a pypi package:
-> ```shell
-> # pip install pplay
-> ```
+# Pplay
 
+Pplay replays **application payloads** from a network capture over a new connection.
+It deliberately ignores original TCP sequence numbers, timing, and most lower-layer details. This makes it useful when a capture must be replayed through a proxy, a different network path, or a small test lab where packet-for-packet replay would not work.
 
-# Support
-For comments, feedback or new feature discussion feel free to drop a message to **pplay-users@googlegroups.com** mailing list.
-If you require .deb package, visit [github releases page](https://github.com/astibal/pplay/releases).
+Its most useful features are:
 
+- export a PCAP flow into an editable **PPlayScript**;
+- change payloads dynamically with Python hooks;
+- replay the client and server sides over TCP, TLS, UDP, or SCTP;
+- package Pplay and replay data into one self-contained Python file;
+- deploy and run that package on a remote host over SSH without installing Pplay there.
 
-# History
-I needed to reproduce some odd network behavior: I was provided with captures in pcap when everything was working and when not.
-Originally I was trying to utilize `netcat` to replay captures back over the network, but sadly always ended up with some mistake.
-With netcat is kind of manual labour, it's working only with ascii based data, while you still need to be aware of crlf issue.
-It was frankly very tedious task.
+## Installation
 
-Then I gave up on manual work, and tried `tcpreplay`. This is really fantastic tool in case you want to replay *exactly* what you have in pcap.
-However, I quickly realized that there is some proxy on the way which is changing TCP sequential numbers. Traffic therefore won't pass the proxy at all.
-
-I thought it would be nice to have a tool which won't bother with anything below application data and send only them. In that case we can define
-same source and destination ip and port, while content remains, making replaying via tcp proxies actually work.
-
-This is why I started `pplay` project.
-
-# Quick start
-
-PPlay is tool to replay/resend application data, it doesn't care of transport layer parameters (which we want, reasons described above). It will grab only the payload from connection you explicitly specify and will make new connection and plays the content in the right order. Of course, you will need to run pplay on server and on client too, with the same pcap file parameter and also with other quite important arguments.
-
-All data about to be sent will be printed out to be confirmed by you. When receiving data, it will tell you if they differ from what we expect and how much; there are 3 levels, OK, modified, different. If they differ significantly (marked as different), they will not be considered as the part of the expected data, so in most cases the logic of packet ordering will stay stable.
-
-Output is colored; RED means anything related to received stuff, GREEN everything to data to be sent, or YELLOW for command line and other data eligible to be sent in the future but not now. WHITE is usually program notifications. At the first sight pplay's output might look bit a messy, but colors really help.
-
-
-# Replaying PCAP
-
-#### List connections you have available
-```
-$ pplay.py --pcap samples/post-chunked-response.pcap --list
-
-10.0.0.20:59471 -> 192.168.132.1:80 (starting at frame 0)
-192.168.132.1:80 -> 10.0.0.20:59471 (starting at frame 1)
+```shell
+python3 -m pip install pplay
 ```
 
-#### Run server side pplay instance
-```
-$ ./pplay.py --pcap samples/post-chunked-response.pcap --server 127.0.0.2:9999 --connection 10.0.0.20:59471
-```
-#### Run client side instance
-```
-$ ./pplay.py --pcap samples/post-chunked-response.pcap --client 127.0.0.2:9999 --connection 10.0.0.20:59471
+The installed command is `pplay.py`:
+
+```shell
+pplay.py --version
+pplay.py --help
 ```
 
-# Replaying SMCAP (smithproxy captures)
+Pplay is primarily developed and tested on Linux.
 
+## How replay works
 
-#### Run server pplay instance
-```
-$ sudo ./pplay.py  --server 127.0.0.2:9999 --smcap samples/smcap_sample.smcap  --ssl
-                            listen on this IP:PORT                             optionally wrap it with SSL
-```
+A capture contains both directions of a conversation. Pplay extracts their payloads and keeps their order:
 
-#### Run client pplay instance
-```
-$ ./pplay.py --smcap samples/smcap_sample.smcap --client 127.0.0.2:9999 --ssl
-                                                         connect here     optionally wrap payload with SSL
+```text
+client payload  ──▶  server
+client          ◀──  server payload
+client payload  ──▶  server
 ```
 
+Normally, run one Pplay instance as the server and another as the client. Both instances use the same capture or PPlayScript. Each side sends only the payloads assigned to its role and checks received data against the expected conversation.
 
-# Replaying PPlayScript #
-pplay also knows how to export data to a "script". This is extremely convenient to do if you are repeating the same test again and again, needing to change parts of the payload dynamically. Output script is in fact a python class, containing also all necessary data, no --pcap or --smcap arguments are needed anymore.
+Pplay reports received data as matching, modified, or different. By default it offers each aligned payload for several seconds before sending it automatically. Use `--auto`, `--noauto`, or the interactive commands to change that behavior.
 
-You can produce script with --export <scriptname> (filename will be scriptname.py). You can then use it by --script scriptname (instead of --pcap or --smcap arguments).
-For example:
+## Quick start with a PCAP
 
-```
-$ ./pplay.py --pcap samples/post-chunked-response.pcap  --connection 10.0.0.20:59471 --export stuff
+First, list usable flows:
 
-Template python script has been exported to file stuff.py
-```
-
-#### You can use "script" as the sniff file (NOTE: missing .py in --script argument)
-```
-$ ./pplay.py --script stuff --server 127.0.0.2:9999
-$ ./pplay.py --script stuff --client 127.0.0.2:9999
+```shell
+pplay.py --pcap capture.pcapng --list
 ```
 
+Select a connection by its source endpoint, for example `10.0.0.20:59471`.
 
-Main purpose of it is the need of dynamic modification of the payload, or other "smart" stuff, that cannot be predicted and programmed for you in pplay directly.
+Start the replay server:
 
-#### Simplistic script example:
-
-
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --server 127.0.0.1:9000
 ```
-#!python
 
-import datetime
+In another terminal, start the client:
 
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --client 127.0.0.1:9000
+```
+
+For a non-interactive one-shot replay, add:
+
+```text
+--auto 0.1 --nostdin --exitoneot --exitondiff
+```
+
+## PPlayScript
+
+A PPlayScript is an editable Python representation of a conversation. It removes the capture dependency and provides hooks for dynamic payload generation, state tracking, STARTTLS, authentication tokens, timestamps, fuzzing logic, or protocol-specific behavior.
+
+Export a selected PCAP flow:
+
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --export replay.py
+```
+
+Run the exported script instead of the capture:
+
+```shell
+pplay.py --script replay.py --server 127.0.0.1:9000
+pplay.py --script replay.py --client 127.0.0.1:9000
+```
+
+### Script structure
+
+Payloads are bytes. `origins` maps each role to indexes in the shared packet list:
+
+```python
 class PPlayScript:
+    def __init__(self, pplay, args=None):
+        self.pplay = pplay
+        self.args = args
 
-    def __init__(self,pplay):
-	    # access to pplay engine
-	    self.pplay = pplay
+        self.packets = [
+            b"EHLO client.example\r\n",
+            b"250 server.example\r\n",
+            b"QUIT\r\n",
+            b"221 bye\r\n",
+        ]
+        self.origins = {
+            "client": [0, 2],
+            "server": [1, 3],
+        }
+        self.server_port = 25
+        self.custom_sport = None
+        self.ssl_cert = None
+        self.ssl_key = None
+        self.ssl_ca_cert = None
+        self.ssl_ca_key = None
 
-	    self.packets = []
-	    self.packets.append('C1\r\n')
-	    self.packets.append('S1\r\n')
-	    self.packets.append('C2\r\n')
-	    self.packets.append('S2\r\n')
+    def before_send(self, role, index, data):
+        # Return bytes or str to replace the payload, or None to keep it.
+        if role == "client" and index == 0:
+            return b"EHLO dynamic.example\r\n"
+        return None
 
-	    self.origins = {}
+    def after_received(self, role, index, data):
+        # Observe received data and update script state if needed.
+        return None
 
-	    self.server_port = 80
-	    self.origins['client']=[0,2]
-	    self.origins['server']=[1,3]
-
-
-
-    def before_send(self,role,index,data):
-	    # when None returned, no changes will be applied and packets[ origins[role][index] ] will be used
-	    if role == 'server' and index == 1:
-		    return data + ": %s"  % (datetime.datetime.now(),)
-
-	    return None
-
-    def after_received(self,role,index,data):
-	    # return value is ignored: use it as data gathering for further processing
-	    return None
-
+    def after_send(self, role, index, data):
+        return None
 ```
 
-As you might see this gives to your hands power to export existing payload with --export and modify it on the fly as you want. You can make a string templates from it and just paste values as desired, or you can write even quite complex code around!
+An optional string can be passed to the script constructor:
 
-
-# Creating and using self-contained package #
-This feature is extremely useful for automation. You can use SMCAP, PCAP or pplayscript, embed it into pplay itself,
-and use this self-contained pplay version by executing it over the SSH (or the other way, SSH is just the most obvious).
-
-The rest is just the same normal pplay. Please note that pplay over ssh needs a bit different approach, so we execute it with:
-
-*  --nostdin - (it's already used by SSH)
-*  --auto - will make transaction waiting times a fraction of second
-*  --script +     this will instruct to *play embedded pplayscript**
-*  --exitoneot  - once we received/sent last message in the transaction, exit.
-
-## Launch embedded server
-
-Pack smcap file into pplay, resulting file in /tmp/smbla.py -- smbla.py will contain pplay and also data from provided smcap file and launch server (on r32 host, options suitable for automation), using packed pplay:
-```
-pplay.py --smcap samples/smcap_sample.smcap --pack /tmp/smbla
-ssh r32 python - --script + --server 8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
+```shell
+pplay.py --script replay.py --script-args test-run-42 --client 127.0.0.1:9000
 ```
 
-## Launch embbedded client
-```
-python - --script + --client 10.16.16.1:8002 --auto 0.1 --nostdin --exitoneot < /tmp/smbla.py
-```
+See the [example scripts](https://github.com/astibal/pplay/tree/master/examples) for additional conversations.
 
-Please note that you need to have installed python-scapy on both remote servers. Of course, SSH needs to be reachable (i.e. you need to create firewall pin-holes for it).
-Also for (and only for) the automation you might want to create ssh key without the passphrase.
+## Self-contained replay
 
-# More details #
-PPlay forgets everything about original IP addresses. It's because you will be testing it in your lab testbed. Only thing it will remember is the the destination port, for server side pplay it's important, meaning the port where it should *listen* for incoming connections. But that's really it.
+`--pack` creates one executable Python file containing:
 
-Client-side pplay will connect to the server-side. Once connected, you will see on one side green hex data and on the other yellow hex data. For HTTP, the client-side would be typically green, since HTTP comes with the request first. On the line above green hex data you will also see e.g. "[1/2] (in sync) offer to send -->". In sync is important here. Those data should be sent now according to pcap.
-If you see yellow data, that side is not on it's turn, and you will not see also "(in sync)" above them.
+- the Pplay engine;
+- the selected payload sequence;
+- embedded certificates or keys when explicitly supplied.
 
-Yellow or green, pplay will act on behalf of you by default in 5 seconds => green data will be sent.
-Hint: you can set --noauto, or --auto <big_seconds> program argument to change autosend feature. This feature could be also toggled on/off during the operation with "i" command shortcut.
+Create a package:
 
-
-## Launch on remote SSH server
-
-**new in version 1.7.0**
-You have learned so far how to "pack" data inside *pplay*. It's pretty useful, but you need to always *--pack*, create a file, send it to the other side, and execute there.
-Even though in previous examples we mentioned how to send *pack*ed over ssh stdin, you still need linux command-line ssh.
-Since version 1.7.0 you can actually utilize --remote-ssh parameter, and pplay will send over ssh itself!
-
-```
-# this will run pplay on remote server, listening there on port 8000, packing all data needed to impersonate
-# server from pcap file
-
-pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --server 8000 --remote-ssh 12.13.14.15:2222 \
-    --exitoneot --auto 0.1
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --pack /tmp/packed-pplay.py
 ```
 
-```
-# this will run pplay on remote server, impersonating client, packing all data needed from pcap file
+Run its server side locally:
 
-pplay --pcap some_sniffer.pcap --connection 1.1.1.1:12345 --client 12.13.14.15:8000 \
-    --remote-ssh 12.13.14.88:2222 --exitoneot --auto 0.1
-```
-
-Nice on this is you don't need anything on remote servers, just pure python. Nothing else is needed.
-
-**Limitation:** since python on remote server receives pplay from stdin which must be closed to actually launch it, commands from standard input are not supported and --nostdin is automatically added to remote command line. Recommended running with `--exitoneot` and `--auto`.
-
-
-## Connect client using SOCKS
-Another useful feature might be to use proxy for client outgoing connection (perhaps you are testing such a proxy, like I am).
-To do so, use --socks parameter, taking IP address optionally suffixed with a port, ie. 10.0.0.1:1080
-
-## Commands ##
-Below hex data (green or yellow), there is some contextual help for you: pplay is waiting for your override action to it's default -- autosend. At the time being, you can enter:
-
-    "y" or hit <enter> to send data
-    "s" to skip them
-    "c" to send CR only
-    "l" to send LF only
-    "x" to send CR+LF characters
-    "i" to disable/enable autosend feature
-    "r" command to replace content of the payload with something else.
-        It does have 'vi'-like syntax: r/POST/GET/0 will replace string "POST" with "GET".
-        Trailing number means max. number of replacements, 0=all
-
-## Data sources ##
-PPlay also supports smithproxy output, just use --smcap instead of --pcap argument option.
-You can wrap the traffic into SSL, just use --ssl option. With smithproxy together, pplay is quite powerful pair of tools: you can easily replay "decrypted" smcap file from smithproxy and wrap it again into SSL to further test.
-
-Hint: Smithproxy it's SSL mitm proxy written by me in C/C++, faking certificate subject. It utilizes iptables TPROXY target. SSL traffic is signed by local CA and plaintext is logged into files.
-
-# Requirements #
-Tool doesn't have too requirements. You have to have installed scapy and colorama python packages.
-
-Scapy is used to parse pcaps and to have scapy available for future features - runs on Linux, Mac and Windows (see instructions how to install scapy on windows here). It's known to not work in Cygwin.
-
-Note: I am deciding to drop scapy in the future.
-Colorama is responsible for multiplatform coloring. On windows, unpack zip-file, run cmd and run python setup.py install. That should make it.
-
-I would recommend to run pplay in linux, I haven't tested it on Windows yet.
-
-
-
-
-# smcap2pcap tool
-This tool is a bit hack. Basically it replays smcap file, while using tcpdump to sniff the traffic.
-There are dozens of reasons why you would like to convert smcap file to pcap. This is the tool for that purpose.
-
-
-Help printout should give you an idea:
-```
-Script pplay to replay smcap and capture it with tcpdump into pcap
-
-  ./smcap2pcap --smcap <source> --pcap <destination> [--verbose]
-
-  --pcap option can be omitted, file will be saved to /tmp/
-
-    Result: replayed traffic pcap filename is the only stdout output for scripting purposes
-      Note: this tool must be able to listen on server port
-   Warning: this tool is a hack, please always verify its results, it's by far not perfect
+```shell
+python3 /tmp/packed-pplay.py \
+  --script + \
+  --server 9000 \
+  --auto 0.1 \
+  --nostdin \
+  --exitoneot
 ```
 
-### Note
-`smcap2pcap` can run since 2.0.9 happily in the separate network namespace:
+The `+` means “use the PPlayScript embedded in this file.”
 
-Example (run as root):
+## SSH self-deployment
+
+The packed file can be streamed to a host that has Python 3 but does not have Pplay installed:
+
+```shell
+ssh lab-server python3 - \
+  --script + \
+  --server 9000 \
+  --auto 0.1 \
+  --nostdin \
+  --exitoneot \
+  < /tmp/packed-pplay.py
 ```
-ip netns add s2p
-ip netns exec s2p ip link set lo up
-ip netns exec s2p ./smcap2pcap --smcap samples/smcap_sample.smcap --pcap /tmp/c.pcap
-ip netns delete s2p
+
+Pplay can also perform packing, transfer, and execution itself with `--remote-ssh`.
+
+Deploy the server side remotely:
+
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --server 9000 \
+  --remote-ssh 192.0.2.20:22 \
+  --remote-ssh-user lab \
+  --auto 0.1 \
+  --exitoneot
 ```
-This is even recommendable, as the network stack is empty and no port conflicts should happen.
+
+Then run the matching client side locally:
+
+```shell
+pplay.py \
+  --pcap capture.pcapng \
+  --connection 10.0.0.20:59471 \
+  --client 192.0.2.20:9000 \
+  --auto 0.1 \
+  --nostdin \
+  --exitoneot
+```
+
+SSH agent or key authentication is recommended. `--remote-ssh-password` exists for controlled test environments, but command-line passwords may be exposed through shell history or process inspection.
+
+The remote host needs only Python for a basic packed replay. Features used by a custom script may require their corresponding Python libraries.
+
+## TLS and STARTTLS
+
+Use `--ssl` to wrap a connection in TLS from the beginning. A server needs either an explicit certificate and key or a CA pair for dynamic certificates:
+
+```shell
+pplay.py --script replay.py --server 9443 --ssl --cert server.pem --key server.key
+pplay.py --script replay.py --client 127.0.0.1:9443 --ssl --sni server.example
+```
+
+A PPlayScript can switch an existing connection to TLS by calling:
+
+```python
+self.pplay.starttls()
+```
+
+from the appropriate `before_send` or `after_send` hook. The repository contains a [STARTTLS example](https://github.com/astibal/pplay/blob/master/examples/smtp_starttls_pps.py).
+
+## Useful options
+
+```text
+--auto SECONDS     send aligned payloads automatically
+--noauto           require interactive confirmation
+--exitoneot        exit at the end of the conversation
+--exitondiff       fail when received data differs
+--nostdin          disable interactive input
+--fuzz LEVEL       deterministically taint payload bytes
+--scatter          split stream payloads into smaller writes
+--socks HOST:PORT  connect the client through SOCKS5
+--tcp / --udp      override the transport detected in the capture
+```
+
+Interactive commands include Enter/`y` to send, `s` to skip, `c` for CR, `l` for LF, `x` for CRLF, `i` to toggle autosend, and `r/old/new/count` to replace payload content.
+
+## Legacy SMCAP support
+
+SMCAP is the historical textual capture format produced by Smithproxy. Pplay still supports `--smcap` and the `smcap2pcap` compatibility utility, but new workflows should generally start from PCAP/PCAPNG or an exported PPlayScript.
+
+```shell
+pplay.py --smcap legacy.smcap --list
+pplay.py --smcap legacy.smcap --export replay.py
+```
+
+## Project links
+
+- Source and issues: <https://github.com/astibal/pplay>
+- PyPI: <https://pypi.org/project/pplay/>
+- License: GNU Library General Public License 2.0 or later

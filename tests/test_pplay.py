@@ -1,9 +1,32 @@
 import io
+import importlib.util
 import sys
+from pathlib import Path
 
 import pytest
 
 import pplay
+
+
+@pytest.mark.parametrize(
+    "example",
+    ["simple1_pps.py", "simple2_pps.py", "smtp_starttls_pps.py"],
+)
+def test_pplayscript_examples_use_current_payload_format(example):
+    path = Path("examples") / example
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    script = module.PPlayScript(pplay.Repeater(None, ""))
+
+    assert script.packets
+    assert all(isinstance(packet, bytes) for packet in script.packets)
+    assert len(script.packets) == sum(len(indexes) for indexes in script.origins.values())
+    assert all(
+        hasattr(script, name)
+        for name in ("ssl_cert", "ssl_key", "ssl_ca_cert", "ssl_ca_key")
+    )
 
 
 def test_smcap_sample_loads():
