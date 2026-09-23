@@ -1,11 +1,21 @@
 import io
 import importlib.util
+import socket
+import subprocess
 import sys
+import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
 import pplay
+
+
+def _unused_tcp_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 @pytest.mark.parametrize(
@@ -178,3 +188,68 @@ def test_export_accepts_ca_argument_names(tmp_path, monkeypatch):
 
     assert exc.value.code == 0
     assert exported.is_file()
+
+
+def test_script_replay_end_to_end(tmp_path):
+    script = tmp_path / "conversation.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            class PPlayScript:
+                def __init__(self, pplay, args=None):
+                    self.pplay = pplay
+                    self.args = args
+                    self.packets = [b"PING\\n", b"PONG\\n"]
+                    self.origins = {"client": [0], "server": [1]}
+                    self.server_port = 0
+                    self.custom_sport = None
+                    self.ssl_cert = None
+                    self.ssl_key = None
+                    self.ssl_ca_cert = None
+                    self.ssl_ca_key = None
+            """
+        ),
+        encoding="utf-8",
+    )
+    port = _unused_tcp_port()
+    common = [
+        sys.executable,
+        str(Path(pplay.__file__).resolve()),
+        "--script",
+        str(script),
+        "--auto",
+        "0.01",
+        "--nostdin",
+        "--exitoneot",
+        "--exitondiff",
+        "--die-after",
+        "10",
+        "--nocolor",
+        "--nohex",
+    ]
+
+    server = subprocess.Popen(
+        common + ["--server", "127.0.0.1:%d" % port],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        time.sleep(0.25)
+        client = subprocess.run(
+            common + ["--client", "127.0.0.1:%d" % port],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=15,
+        )
+        server_output, _ = server.communicate(timeout=15)
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait()
+
+    assert client.returncode == 0, client.stdout
+    assert server.returncode == 0, server_output
+    assert "has been sent (5 bytes)" in client.stdout
+    assert "has been sent (5 bytes)" in server_output

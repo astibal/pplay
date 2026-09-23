@@ -7,6 +7,7 @@ import datetime
 import difflib
 import fileinput
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -47,7 +48,7 @@ class Features:
     scatter_prng = None
 
 
-pplay_version = "2.0.10"
+pplay_version = "2.0.11"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
@@ -851,7 +852,7 @@ class Repeater:
         self.deathhand = None
 
     def reset(self):
-        self.to_send = ''
+        self.to_send = b''
         self.packet_index = 0
         self.total_packet_index = 0
         self.read_packet_counter = 0
@@ -2453,6 +2454,9 @@ class Repeater:
                     # on data: reset ctrc_count for connectionless ... connections :-)
                     self.ctrc_count = 0
 
+            if self.sock in w and not self.write_end:
+                self.packet_write(cmd_hook=(sys.stdin in r))
+
             if self.write_end and sys.stdin in r:
                 l = sys.stdin.readline()
                 if len(l) > 0:
@@ -3012,10 +3016,15 @@ def main():
 
                 print_white_bright("Loading custom script: %s (pwd=%s)" % (args.script[0], os.getcwd()))
 
-                mod_name = args.script[0]
-                if mod_name.endswith(".py"):
-                    mod_name = mod_name[0:-3]
-                g_script_module = __import__(os.path.basename(mod_name), globals(), locals(), [], -1)
+                script_path = os.path.abspath(args.script[0])
+                module_name = "pplay_script_%s" % hashlib.sha1(
+                    script_path.encode("utf-8")
+                ).hexdigest()
+                spec = importlib.util.spec_from_file_location(module_name, script_path)
+                if spec is None or spec.loader is None:
+                    raise ImportError("cannot create module spec for %s" % script_path)
+                g_script_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(g_script_module)
 
                 repeater.scripter = g_script_module.PPlayScript(repeater, repeater.scripter_args)
                 repeater.load_scripter_defaults()
@@ -3198,6 +3207,8 @@ def main():
 
                         client = None
                         stdout = None
+                        remote_status = None
+                        remote_error = None
                         try:
                             paramiko.util.log_to_file('/dev/null')
                             from paramiko.ssh_exception import SSHException, AuthenticationException
@@ -3286,17 +3297,27 @@ def main():
                                     # this currently doesn't work - stdin is closed by channel                                
                                     stdin.write(cmd)
 
+                            while chan.recv_ready():
+                                d = chan.recv(10240)
+                                if len(d) > 0:
+                                    sys.stdout.write(bytes(d).decode('utf-8'))
+
+                            remote_status = chan.recv_exit_status()
+
                         except paramiko.AuthenticationException as e:
-                            print_red_bright("remote-ssh[local]: authentication failed")
+                            remote_error = e
+                            print_red_bright("remote-ssh[local]: authentication failed: %s" % e)
 
                         except paramiko.SSHException as e:
-                            print_red_bright("remote-ssh[local]: ssh protocol error")
+                            remote_error = e
+                            print_red_bright("remote-ssh[local]: ssh protocol error: %s" % e)
 
                         except KeyboardInterrupt as e:
                             print_red_bright("remote-ssh[local]: Ctrl-C: bailing, terminating remote-ssh.")
 
                         except socket.error as e:
-                            print_red_bright("remote-ssh[local]: socket error")
+                            remote_error = e
+                            print_red_bright("remote-ssh[local]: socket error: %s" % e)
                         finally:
                             if client:
                                 client.close()
@@ -3305,6 +3326,13 @@ def main():
 
                         if stdout:
                             stdout.flush()
+
+                        if remote_error is not None:
+                            sys.exit(2)
+
+                        if remote_status:
+                            print_red_bright("remote-ssh[remote]: command failed with status %d" % remote_status)
+                            sys.exit(remote_status)
 
                         sys.exit(0)
                     else:
