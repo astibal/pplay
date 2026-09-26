@@ -34,6 +34,7 @@ local or remote replay
 - [SSH self-deployment](#ssh-self-deployment)
 - [TLS and STARTTLS](#tls-and-starttls)
 - [Automated testing](#automated-testing)
+- [Parallel and repeated clients](#parallel-and-repeated-clients)
 - [Exact stream fragmentation](#exact-stream-fragmentation)
 - [Useful options](#useful-options)
 - [Legacy SMCAP support](#legacy-smcap-support)
@@ -312,6 +313,130 @@ duration. In test mode the primary exit codes are stable:
 4  transport error
 ```
 
+## Parallel and repeated clients
+
+Client runs can be repeated inside several parallel workers:
+
+```shell
+pplay.py --script replay.py --test --client 127.0.0.1:9000 \
+  --parallel-runs 4 \
+  --parallel-start-delays 0 0.5 2 \
+  --repeat 10 \
+  --repeat-interval 1
+```
+
+This creates 4 workers with 10 sequential replays each, for a total of 40
+client connections:
+
+```text
+client orchestrator
+    |
+    +-- worker P1: R1 -> R2 -> ... -> R10
+    +-- worker P2: R1 -> R2 -> ... -> R10
+    +-- worker P3: R1 -> R2 -> ... -> R10
+    `-- worker P4: R1 -> R2 -> ... -> R10
+```
+
+### Worker start timing
+
+Start delays are measured from the start of one worker to the start of the next:
+
+```text
+P1 --0s--> P2 --0.5s--> P3 --2s--> P4
+```
+
+When fewer delays than required are supplied, the last value is reused. For
+example, five workers with `--parallel-start-delays 1 2` start as follows:
+
+```text
+P1 --1s--> P2 --2s--> P3 --2s--> P4 --2s--> P5
+```
+
+Comma-separated values such as `--parallel-start-delays 0,0.5,2` are accepted
+too.
+
+### Isolation and output
+
+Each worker repeats its client replay sequentially. Workers share a stop signal,
+but every replay runs in an isolated child process so socket, TLS, fuzz, scatter,
+script, and report state cannot leak between concurrent runs:
+
+```text
+shared stop event
+    |
+    +-- worker thread P1 -- isolated Pplay process R1, R2, ...
+    +-- worker thread P2 -- isolated Pplay process R1, R2, ...
+    `-- worker thread P3 -- isolated Pplay process R1, R2, ...
+```
+
+`--repeat-interval` is measured after a replay finishes and before that worker
+starts its next replay. Every output line is labelled with its worker and repeat:
+
+```text
+[P2/4 R3/10] # ... has been sent (128 bytes)
+```
+
+Without parallel or repeat options, Pplay uses its original direct execution
+path and does not create an orchestrator or child replay process.
+
+### Failure handling
+
+Useful orchestration controls:
+
+```text
+--parallel-fail-fast       stop delayed starts and future repeats after a failure
+--parallel-timeout SEC     maximum duration of one replay
+--report-dir DIR           write one JSON and JUnit report per replay
+--parallel-summary-json F  write an aggregate atomic JSON report
+```
+
+Fail-fast uses the shared stop event. Replays that are already running are
+allowed to finish, while delayed worker starts and future repeats are cancelled.
+`--parallel-timeout` applies separately to each replay and is independent of
+Pplay's internal `--die-after` safety timer.
+
+### Reports
+
+When `--report-json` or `--report-junit` is used directly, its filename is
+automatically extended with `.pNN-rNNN` for orchestrated runs.
+
+`--report-dir results` creates a JSON and JUnit file for every replay:
+
+```text
+results/
+|-- pplay-p01-r001.json
+|-- pplay-p01-r001.xml
+|-- pplay-p01-r002.json
+|-- pplay-p01-r002.xml
+`-- pplay-p02-r001.json
+```
+
+The aggregate summary records the start offset, duration, timeout state, and
+return code of every replay:
+
+```json
+{
+  "result": "pass",
+  "parallel_runs": 2,
+  "repeat": 2,
+  "duration_ms": 4381,
+  "runs": [
+    {
+      "parallel_index": 1,
+      "repeat_index": 1,
+      "started_after_ms": 0,
+      "duration_ms": 2091,
+      "timed_out": false,
+      "returncode": 0
+    }
+  ]
+}
+```
+
+Client orchestration is intentionally not available in server mode. A Pplay
+server remains a single replay endpoint; use a concurrent origin server when
+testing many simultaneous clients.
+
 ## Exact stream fragmentation
 
 `--split` controls individual socket writes for a global packet index. Values
@@ -350,6 +475,14 @@ CLI `--split` entries override matching script entries.
 --test             strict non-interactive replay preset
 --report-json FILE write an atomic JSON test report
 --report-junit FILE write an atomic JUnit XML test report
+--parallel-runs N   run N client workers concurrently
+--parallel-start-delays T... delay consecutive worker starts
+--repeat N          repeat each client worker N times
+--repeat-interval T wait after a replay before its next repeat
+--parallel-timeout T limit each orchestrated replay
+--parallel-fail-fast stop scheduling work after the first failure
+--report-dir DIR     write per-replay JSON and JUnit reports
+--parallel-summary-json FILE write an aggregate JSON report
 --socks HOST:PORT  connect the client through SOCKS5
 --tcp / --udp      override the transport detected in the capture
 ```

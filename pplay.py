@@ -14,6 +14,7 @@ import re
 import shlex
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -2833,6 +2834,205 @@ def print_overview():
     print_yellow("\nFor more options see --help\n")
 
 
+def _numbered_path(path, parallel_index, repeat_index):
+    stem, extension = os.path.splitext(path)
+    return "%s.p%02d-r%03d%s" % (stem, parallel_index, repeat_index, extension)
+
+
+def _orchestrated_child_args(argv, parallel_index, repeat_index, report_dir=None):
+    value_options = {
+        "--parallel-runs", "--repeat", "--repeat-interval", "--parallel-timeout",
+        "--parallel-summary-json", "--report-dir",
+    }
+    flag_options = {"--parallel-fail-fast"}
+    result = []
+    index = 0
+    while index < len(argv):
+        option = argv[index]
+        option_name = option.split("=", 1)[0]
+        if option_name in value_options:
+            index += 1 if "=" in option else 2
+            continue
+        if option_name == "--parallel-start-delays":
+            if "=" in option:
+                index += 1
+                continue
+            index += 1
+            while index < len(argv) and not argv[index].startswith("-"):
+                index += 1
+            continue
+        if option_name in flag_options:
+            index += 1
+            continue
+        if option_name in ("--report-json", "--report-junit"):
+            if "=" in option:
+                report_path = option.split("=", 1)[1]
+                result.append("%s=%s" % (
+                    option_name,
+                    _numbered_path(report_path, parallel_index, repeat_index),
+                ))
+                index += 1
+                continue
+            if index + 1 < len(argv):
+                result.extend([option, _numbered_path(argv[index + 1], parallel_index, repeat_index)])
+                index += 2
+                continue
+        if option_name in ("--report-json", "--report-junit"):
+            index += 1
+            continue
+        result.append(option)
+        index += 1
+
+    if report_dir:
+        os.makedirs(report_dir, exist_ok=True)
+        base = os.path.join(report_dir, "pplay-p%02d-r%03d" % (parallel_index, repeat_index))
+        if "--report-json" not in result:
+            result.extend(["--report-json", base + ".json"])
+        if "--report-junit" not in result:
+            result.extend(["--report-junit", base + ".xml"])
+    return result
+
+
+def _parse_start_delays(values, parser):
+    delays = []
+    try:
+        for value in values:
+            delays.extend(float(item) for item in value.split(",") if item != "")
+    except ValueError:
+        parser.error("--parallel-start-delays expects non-negative seconds")
+    if any(delay < 0 for delay in delays):
+        parser.error("--parallel-start-delays expects non-negative seconds")
+    return delays or [0.0]
+
+
+def run_client_orchestrator(args, parser):
+    parallel_runs = args.parallel_runs
+    repeat_count = args.repeat
+    needs_orchestration = (
+        parallel_runs != 1
+        or repeat_count != 1
+        or args.parallel_timeout is not None
+        or args.report_dir
+        or args.parallel_summary_json
+    )
+    if not needs_orchestration:
+        return None
+    if not args.client:
+        parser.error("--parallel-runs and --repeat are client-only")
+
+    delays = _parse_start_delays(args.parallel_start_delays, parser)
+    print_lock = threading.Lock()
+    result_lock = threading.Lock()
+    stop_event = threading.Event()
+    active_lock = threading.Lock()
+    active_processes = set()
+    results = []
+    started = time.time()
+
+    def emit(prefix, line):
+        with print_lock:
+            print("%s %s" % (prefix, line.rstrip("\n")), flush=True)
+
+    def worker(parallel_index):
+        for repeat_index in range(1, repeat_count + 1):
+            if stop_event.is_set():
+                break
+            prefix = "[P%d/%d R%d/%d]" % (
+                parallel_index, parallel_runs, repeat_index, repeat_count,
+            )
+            child_args = _orchestrated_child_args(
+                sys.argv[1:], parallel_index, repeat_index, args.report_dir,
+            )
+            command = [sys.executable, os.path.abspath(__file__)] + child_args
+            run_started = time.time()
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            with active_lock:
+                active_processes.add(process)
+            timed_out = False
+            try:
+                def forward_output():
+                    for line in process.stdout:
+                        emit(prefix, line)
+
+                output_thread = threading.Thread(target=forward_output, daemon=True)
+                output_thread.start()
+                try:
+                    returncode = process.wait(timeout=args.parallel_timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    process.kill()
+                    process.wait()
+                    returncode = 3
+                    emit(prefix, "orchestrator timeout after %ss" % args.parallel_timeout)
+                output_thread.join()
+            finally:
+                with active_lock:
+                    active_processes.discard(process)
+
+            run_result = {
+                "parallel_index": parallel_index,
+                "repeat_index": repeat_index,
+                "returncode": returncode,
+                "timed_out": timed_out,
+                "started_after_ms": round((run_started - started) * 1000),
+                "duration_ms": round((time.time() - run_started) * 1000),
+            }
+            with result_lock:
+                results.append(run_result)
+            if returncode != 0 and args.parallel_fail_fast:
+                stop_event.set()
+                break
+            if repeat_index < repeat_count and not stop_event.wait(args.repeat_interval):
+                continue
+
+    threads = []
+    try:
+        for parallel_index in range(1, parallel_runs + 1):
+            if parallel_index > 1:
+                delay = delays[min(parallel_index - 2, len(delays) - 1)]
+                if stop_event.wait(delay):
+                    break
+            thread = threading.Thread(target=worker, args=(parallel_index,))
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+    except KeyboardInterrupt:
+        stop_event.set()
+        with active_lock:
+            for process in list(active_processes):
+                process.terminate()
+        for thread in threads:
+            thread.join()
+        raise
+
+    summary = {
+        "result": "pass" if len(results) == parallel_runs * repeat_count
+                  and all(item["returncode"] == 0 for item in results) else "fail",
+        "parallel_runs": parallel_runs,
+        "repeat": repeat_count,
+        "duration_ms": round((time.time() - started) * 1000),
+        "runs": sorted(results, key=lambda item: (item["parallel_index"], item["repeat_index"])),
+    }
+    if args.parallel_summary_json:
+        TestReport._atomic_write(
+            args.parallel_summary_json,
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        )
+    print("orchestrator: result=%s passed=%d failed=%d" % (
+        summary["result"],
+        sum(item["returncode"] == 0 for item in results),
+        sum(item["returncode"] != 0 for item in results),
+    ))
+    return 0 if summary["result"] == "pass" else 1
+
+
 def main():
     global g_script_module, g_test_report
 
@@ -2981,6 +3181,24 @@ def main():
     var.add_argument('--report-json', metavar='FILE', help='write an atomic machine-readable replay report')
     var.add_argument('--report-junit', metavar='FILE', help='write an atomic JUnit XML replay report')
 
+    orchestration = parser.add_argument_group("Client orchestration")
+    orchestration.add_argument('--parallel-runs', type=int, default=1, metavar='N',
+                               help='run N isolated client workers concurrently')
+    orchestration.add_argument('--parallel-start-delays', nargs='+', default=['0'], metavar='SECONDS',
+                               help='delays between worker starts; the last value fills missing entries')
+    orchestration.add_argument('--repeat', type=int, default=1, metavar='N',
+                               help='run each client worker N times sequentially')
+    orchestration.add_argument('--repeat-interval', type=float, default=0.0, metavar='SECONDS',
+                               help='delay after a run finishes before its next repeat')
+    orchestration.add_argument('--parallel-timeout', type=float, default=None, metavar='SECONDS',
+                               help='kill an individual replay after this many seconds')
+    orchestration.add_argument('--parallel-fail-fast', action='store_true',
+                               help='stop scheduling repeats after the first failed replay')
+    orchestration.add_argument('--report-dir', metavar='DIR',
+                               help='write per-run JSON and JUnit reports into DIR')
+    orchestration.add_argument('--parallel-summary-json', metavar='FILE',
+                               help='write an aggregate atomic JSON report')
+
     if Features.have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
         rem_ssh.add_argument('--remote-ssh-user', nargs=1,
@@ -2997,6 +3215,15 @@ def main():
         prot_sctp.add_argument("--help-sctp", required=False, action='store_true', help="how to get sctp support")
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.parallel_runs < 1:
+        parser.error("--parallel-runs must be at least 1")
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
+    if args.repeat_interval < 0:
+        parser.error("--repeat-interval must be non-negative")
+    if args.parallel_timeout is not None and args.parallel_timeout <= 0:
+        parser.error("--parallel-timeout must be positive")
 
     if args.test_mode:
         args.auto = 0.01
@@ -3019,6 +3246,10 @@ def main():
 
     except Exception:
         pass
+
+    orchestration_status = run_client_orchestrator(args, parser)
+    if orchestration_status is not None:
+        sys.exit(orchestration_status)
 
     if args.verbose:
         Features.verbose = True

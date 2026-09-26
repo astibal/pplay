@@ -1,5 +1,4 @@
 include requirements.txt
 include README.md
-exclude README.rst
 prune tests
 prune samples

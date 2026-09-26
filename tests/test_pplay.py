@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -224,6 +225,28 @@ def test_machine_reports_are_atomic_and_describe_failure(tmp_path):
     assert "failure" in junit_path.read_text(encoding="utf-8")
 
 
+def test_orchestrator_removes_parent_options_and_numbers_reports():
+    result = pplay._orchestrated_child_args(
+        [
+            "--client",
+            "127.0.0.1:80",
+            "--parallel-runs=3",
+            "--parallel-start-delays=0,1",
+            "--repeat",
+            "4",
+            "--report-json=result.json",
+        ],
+        parallel_index=2,
+        repeat_index=3,
+    )
+
+    assert result == [
+        "--client",
+        "127.0.0.1:80",
+        "--report-json=result.p02-r003.json",
+    ]
+
+
 def test_export_accepts_ca_argument_names(tmp_path, monkeypatch):
     exported = tmp_path / "exported.py"
     monkeypatch.setattr(
@@ -334,3 +357,292 @@ def test_test_mode_reports_transport_failure(tmp_path):
 
     assert result.returncode == 4, result.stdout
     assert json.loads(report_path.read_text(encoding="utf-8"))["result"] == "transport_error"
+
+
+def test_parallel_repeat_orchestrator(tmp_path):
+    expected_connections = 4
+    received = []
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(expected_connections)
+    listener.settimeout(10)
+    port = listener.getsockname()[1]
+
+    def receive_all():
+        try:
+            for _ in range(expected_connections):
+                connection, _address = listener.accept()
+                with connection:
+                    received.append(connection.recv(1024))
+        finally:
+            listener.close()
+
+    server_thread = threading.Thread(target=receive_all)
+    server_thread.start()
+    script = tmp_path / "client-only.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            class PPlayScript:
+                def __init__(self, pplay, args=None):
+                    self.pplay = pplay
+                    self.packets = [b"parallel-test"]
+                    self.origins = {"client": [0], "server": []}
+                    self.server_port = 0
+                    self.custom_sport = None
+                    self.ssl_cert = self.ssl_key = None
+                    self.ssl_ca_cert = self.ssl_ca_key = None
+            """
+        ),
+        encoding="utf-8",
+    )
+    report_dir = tmp_path / "reports"
+    summary_path = tmp_path / "summary.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            str(script),
+            "--test",
+            "--client",
+            "127.0.0.1:%d" % port,
+            "--parallel-runs",
+            "2",
+            "--parallel-start-delays",
+            "0.2",
+            "--repeat",
+            "2",
+            "--repeat-interval",
+            "0.01",
+            "--report-dir",
+            str(report_dir),
+            "--parallel-summary-json",
+            str(summary_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=20,
+    )
+    server_thread.join(timeout=10)
+
+    assert result.returncode == 0, result.stdout
+    assert sorted(received) == [b"parallel-test"] * expected_connections
+    assert "[P1/2 R1/2]" in result.stdout
+    assert "[P2/2 R2/2]" in result.stdout
+    assert len(list(report_dir.glob("*.json"))) == expected_connections
+    assert len(list(report_dir.glob("*.xml"))) == expected_connections
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["result"] == "pass"
+    assert len(summary["runs"]) == expected_connections
+    first_starts = {
+        run["parallel_index"]: run["started_after_ms"]
+        for run in summary["runs"]
+        if run["repeat_index"] == 1
+    }
+    assert first_starts[2] - first_starts[1] >= 150
+
+
+def test_start_delay_parser_accepts_lists_commas_and_reuses_last_value():
+    parser = pplay.argparse.ArgumentParser()
+
+    delays = pplay._parse_start_delays(["0.1,0.2", "0.3"], parser)
+
+    assert delays == [0.1, 0.2, 0.3]
+    assert [delays[min(index, len(delays) - 1)] for index in range(5)] == [
+        0.1, 0.2, 0.3, 0.3, 0.3,
+    ]
+
+
+def test_fail_fast_stops_future_repeats(tmp_path):
+    port = _unused_tcp_port()
+    summary_path = tmp_path / "fail-fast.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--test",
+            "--client",
+            "127.0.0.1:%d" % port,
+            "--repeat",
+            "3",
+            "--repeat-interval",
+            "0.5",
+            "--parallel-fail-fast",
+            "--parallel-summary-json",
+            str(summary_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=15,
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert result.returncode == 1, result.stdout
+    assert summary["result"] == "fail"
+    assert len(summary["runs"]) == 1
+    assert summary["runs"][0]["returncode"] == 4
+
+
+def test_fail_fast_shared_signal_cancels_delayed_workers(tmp_path):
+    port = _unused_tcp_port()
+    summary_path = tmp_path / "shared-stop.json"
+    started = time.monotonic()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--test",
+            "--client",
+            "127.0.0.1:%d" % port,
+            "--parallel-runs",
+            "2",
+            "--parallel-start-delays",
+            "5",
+            "--parallel-fail-fast",
+            "--parallel-summary-json",
+            str(summary_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=15,
+    )
+    elapsed = time.monotonic() - started
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert result.returncode == 1, result.stdout
+    assert elapsed < 5
+    assert len(summary["runs"]) == 1
+    assert summary["runs"][0]["parallel_index"] == 1
+
+
+def test_repeat_interval_delays_next_run(tmp_path):
+    port = _unused_tcp_port()
+    summary_path = tmp_path / "repeat-interval.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--test",
+            "--client",
+            "127.0.0.1:%d" % port,
+            "--repeat",
+            "2",
+            "--repeat-interval",
+            "0.25",
+            "--parallel-summary-json",
+            str(summary_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=15,
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert result.returncode == 1, result.stdout
+    assert len(summary["runs"]) == 2
+    first, second = summary["runs"]
+    assert second["started_after_ms"] >= first["started_after_ms"] + first["duration_ms"] + 200
+
+
+def test_parallel_timeout_kills_stalled_replay(tmp_path):
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    release_server = threading.Event()
+
+    def stalled_server():
+        connection, _address = listener.accept()
+        with connection:
+            connection.recv(1024)
+            release_server.wait(5)
+        listener.close()
+
+    server_thread = threading.Thread(target=stalled_server, daemon=True)
+    server_thread.start()
+    summary_path = tmp_path / "timeout.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--test",
+            "--client",
+            "127.0.0.1:%d" % port,
+            "--parallel-timeout",
+            "1.5",
+            "--parallel-summary-json",
+            str(summary_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=15,
+    )
+    release_server.set()
+    server_thread.join(timeout=5)
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert result.returncode == 1, result.stdout
+    assert summary["runs"][0]["timed_out"] is True
+    assert summary["runs"][0]["returncode"] == 3
+    assert "orchestrator timeout" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--parallel-runs", "0"],
+        ["--repeat", "0"],
+        ["--repeat-interval", "-1"],
+        ["--parallel-timeout", "0"],
+    ],
+)
+def test_orchestration_rejects_invalid_counts_and_intervals(arguments):
+    result = subprocess.run(
+        [sys.executable, str(Path(pplay.__file__).resolve())] + arguments,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 2
+
+
+def test_repeat_and_parallel_options_are_client_only():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--server",
+            "19091",
+            "--repeat",
+            "2",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 2
+    assert "client-only" in result.stdout
