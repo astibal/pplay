@@ -1,5 +1,6 @@
 import io
 import importlib.util
+import json
 import socket
 import subprocess
 import sys
@@ -107,8 +108,10 @@ def test_zero_length_socket_write_fails_instead_of_looping():
 class RecordingSocket:
     def __init__(self):
         self.data = bytearray()
+        self.writes = []
 
     def send(self, data):
+        self.writes.append(bytes(data))
         self.data.extend(data)
         return len(data)
 
@@ -169,6 +172,58 @@ def test_script_hooks_modify_manual_send():
     ]
 
 
+def test_exact_fragment_sizes_are_used_for_stream_writes():
+    repeater = pplay.Repeater(None, "")
+    repeater.sock = RecordingSocket()
+    repeater.whoami = "client"
+    repeater.packets = [b"abcdefghij"]
+    repeater.origins = {"client": [0], "server": []}
+    repeater.fragments = {0: [1, 3, 2]}
+    repeater.to_send = repeater.packets[0]
+
+    repeater.send_to_send()
+
+    assert repeater.sock.writes == [b"a", b"bcd", b"ef", b"ghij"]
+
+
+def test_script_refuzz_is_repeatable_for_fresh_server_sessions(monkeypatch):
+    class Script:
+        packets = [b"client payload", b"server payload"]
+
+    repeater = pplay.Repeater(None, "")
+    repeater.fuzz = True
+    monkeypatch.setattr(pplay.Features, "fuzz_magic", "repeatable")
+    monkeypatch.setattr(pplay.Features, "fuzz_level", 128)
+    monkeypatch.setattr(
+        pplay.Features,
+        "fuzz_prng",
+        pplay.BytesGenerator("repeatable", use_hash=pplay.hashlib.sha256()),
+    )
+
+    repeater.scripter = Script()
+    repeater.scripter_refuzz()
+    first = list(repeater.packets)
+    repeater.scripter = Script()
+    repeater.scripter_refuzz()
+
+    assert repeater.packets == first
+
+
+def test_machine_reports_are_atomic_and_describe_failure(tmp_path):
+    json_path = tmp_path / "report.json"
+    junit_path = tmp_path / "report.xml"
+    report = pplay.TestReport(str(json_path), str(junit_path))
+    report.role = "client"
+    report.mismatches = 1
+    report.received_packets = 2
+    report.write()
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["result"] == "mismatch"
+    assert data["payload_mismatches"] == 1
+    assert "failure" in junit_path.read_text(encoding="utf-8")
+
+
 def test_export_accepts_ca_argument_names(tmp_path, monkeypatch):
     exported = tmp_path / "exported.py"
     monkeypatch.setattr(
@@ -212,24 +267,22 @@ def test_script_replay_end_to_end(tmp_path):
         encoding="utf-8",
     )
     port = _unused_tcp_port()
+    server_report = tmp_path / "server.json"
+    client_report = tmp_path / "client.json"
     common = [
         sys.executable,
         str(Path(pplay.__file__).resolve()),
         "--script",
         str(script),
-        "--auto",
-        "0.01",
-        "--nostdin",
-        "--exitoneot",
-        "--exitondiff",
+        "--test",
         "--die-after",
         "10",
-        "--nocolor",
-        "--nohex",
+        "--split",
+        "0:1,2",
     ]
 
     server = subprocess.Popen(
-        common + ["--server", "127.0.0.1:%d" % port],
+        common + ["--report-json", str(server_report), "--server", "127.0.0.1:%d" % port],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -237,7 +290,7 @@ def test_script_replay_end_to_end(tmp_path):
     try:
         time.sleep(0.25)
         client = subprocess.run(
-            common + ["--client", "127.0.0.1:%d" % port],
+            common + ["--report-json", str(client_report), "--client", "127.0.0.1:%d" % port],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -253,3 +306,31 @@ def test_script_replay_end_to_end(tmp_path):
     assert server.returncode == 0, server_output
     assert "has been sent (5 bytes)" in client.stdout
     assert "has been sent (5 bytes)" in server_output
+    assert json.loads(client_report.read_text(encoding="utf-8"))["result"] == "pass"
+    assert json.loads(server_report.read_text(encoding="utf-8"))["result"] == "pass"
+
+
+def test_test_mode_reports_transport_failure(tmp_path):
+    port = _unused_tcp_port()
+    report_path = tmp_path / "transport-error.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(pplay.__file__).resolve()),
+            "--script",
+            "examples/simple1_pps.py",
+            "--test",
+            "--report-json",
+            str(report_path),
+            "--client",
+            "127.0.0.1:%d" % port,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 4, result.stdout
+    assert json.loads(report_path.read_text(encoding="utf-8"))["result"] == "transport_error"

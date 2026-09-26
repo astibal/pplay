@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from select import select
 
 
@@ -44,6 +45,7 @@ class Features:
 
     fuzz_prng = None
     fuzz_level = 230
+    fuzz_magic = "pplay"
 
     scatter_prng = None
 
@@ -58,8 +60,83 @@ pplay_copyright = "written by Ales Stibal <astib@mag0.net>"
 
 g_script_module = None
 g_delete_files = []
+g_test_report = None
 
 g_hostname = socket.gethostname()
+
+
+class TestReport:
+    def __init__(self, json_path=None, junit_path=None):
+        self.json_path = json_path
+        self.junit_path = junit_path
+        self.started = time.time()
+        self.role = None
+        self.completed = False
+        self.timed_out = False
+        self.error = None
+        self.mismatches = 0
+        self.sent_packets = 0
+        self.sent_bytes = 0
+        self.received_packets = 0
+        self.received_bytes = 0
+
+    def result(self):
+        if self.timed_out:
+            return "timeout"
+        if self.error:
+            return self.error
+        if self.mismatches:
+            return "mismatch"
+        if self.completed:
+            return "pass"
+        return "incomplete"
+
+    def as_dict(self):
+        return {
+            "result": self.result(),
+            "role": self.role,
+            "duration_ms": round((time.time() - self.started) * 1000),
+            "sent_packets": self.sent_packets,
+            "sent_bytes": self.sent_bytes,
+            "received_packets": self.received_packets,
+            "received_bytes": self.received_bytes,
+            "payload_mismatches": self.mismatches,
+            "error": self.error,
+        }
+
+    @staticmethod
+    def _atomic_write(path, content):
+        directory = os.path.dirname(os.path.abspath(path))
+        fd, temporary = tempfile.mkstemp(prefix=".pplay-report-", dir=directory, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                output.write(content)
+            os.replace(temporary, path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    def write(self):
+        data = self.as_dict()
+        if self.json_path:
+            self._atomic_write(self.json_path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        if self.junit_path:
+            suite = ET.Element(
+                "testsuite",
+                name="pplay",
+                tests="1",
+                failures="0" if data["result"] == "pass" else "1",
+                time="%.3f" % (data["duration_ms"] / 1000),
+            )
+            case = ET.SubElement(suite, "testcase", classname="pplay", name=self.role or "replay",
+                                 time="%.3f" % (data["duration_ms"] / 1000))
+            if data["result"] != "pass":
+                failure = ET.SubElement(case, "failure", type=data["result"], message=data["result"])
+                failure.text = json.dumps(data, sort_keys=True)
+            self._atomic_write(self.junit_path, ET.tostring(suite, encoding="unicode") + "\n")
 
 try:
     from scapy.all import rdpcap
@@ -835,6 +912,10 @@ class Repeater:
 
         self.fuzz = False
         self.scatter = False
+        self.fragments = {}
+        self.cli_fragments = {}
+        self.report = None
+        self.test_mode = False
 
         # our peer (ip,port)
         self.target = (0, 0)
@@ -875,6 +956,11 @@ class Repeater:
             self.server_port = self.scripter.server_port
             self.packets = self.scripter.packets
             self.origins = self.scripter.origins
+
+            script_fragments = getattr(self.scripter, "fragments", None)
+            if script_fragments:
+                self.fragments.update(script_fragments)
+            self.fragments.update(self.cli_fragments)
 
             has_cert = False
             has_ca = False
@@ -1047,6 +1133,10 @@ class Repeater:
         if not self.fuzz or not Features.fuzz_prng or not self.scripter:
             debuk("not refuzzing, no prng or fuzz is not set")
             return
+
+        # A server creates a fresh PPlayScript after every accept(). Restarting
+        # the PRNG keeps both endpoints and repeated connections deterministic.
+        Features.fuzz_prng = BytesGenerator(Features.fuzz_magic, use_hash=hashlib.sha256())
 
         new_data = []
 
@@ -1364,6 +1454,8 @@ class Repeater:
         for k in self.origins.keys():
             c += "        self.origins['%s']=%s\n" % (k, self.origins[k])
 
+        c += "        self.fragments=%s\n" % (repr(self.fragments),)
+
         c += "\n\n"
 
         if self.ssl_cert:
@@ -1421,8 +1513,11 @@ class Repeater:
                 # -10 is cancel signal
                 if self.die_after > -10:
                     print_red("killed by the deathhand")
+                    if self.report:
+                        self.report.timed_out = True
+                        self.report.write()
                     cleanup()
-                    os._exit(-15)  # don't mess with other threads and just finish it
+                    os._exit(3 if self.test_mode else -15)
                 else:
                     return
 
@@ -1430,6 +1525,9 @@ class Repeater:
 
     # for spaghetti lovers
     def impersonate(self, who):
+
+        if self.report:
+            self.report.role = who
 
         if self.die_after > 0:
             self.deathhand = threading.Thread(target=Repeater.killer_is_me, args=(self,))
@@ -1702,6 +1800,10 @@ class Repeater:
                 print_white_bright(" === ")
                 print_white_bright("   Connecting to %s:%s failed: %s" % (ip, port, e))
                 print_white_bright(" === ")
+                if self.test_mode:
+                    if self.report:
+                        self.report.error = "transport_error"
+                    sys.exit(4)
                 return
 
             try:
@@ -1712,6 +1814,10 @@ class Repeater:
                 print_white_bright(" === ")
                 print_white_bright("   Connection to %s:%s failed: %s" % (ip, port, e))
                 print_white_bright(" === ")
+                if self.test_mode:
+                    if self.report:
+                        self.report.error = "transport_error"
+                    sys.exit(4)
                 return
 
         except KeyboardInterrupt as e:
@@ -1861,6 +1967,7 @@ class Repeater:
                     if g_script_module:
                         self.scripter = g_script_module.PPlayScript(self, self.scripter_args)
                         self.load_scripter_defaults()
+                        self.scripter_refuzz()
 
                     self.packet_loop()
                 except KeyboardInterrupt as e:
@@ -1897,7 +2004,9 @@ class Repeater:
             return
         except socket.error as e:
             print_white_bright("Server error: %s" % (e,))
-            sys.exit(16)
+            if self.report:
+                self.report.error = "transport_error"
+            sys.exit(4 if self.test_mode else 16)
 
     def recv(self, pending):
         if self.is_sctp and not self.use_ssl:
@@ -2036,6 +2145,25 @@ class Repeater:
         to_send_idx = who.origins[role][role_index]
         return who.packets[to_send_idx]
 
+    def split_payload(self, payload, global_index):
+        sizes = self.fragments.get(global_index, [])
+        if not sizes or self.is_udp:
+            return [payload]
+
+        chunks = []
+        offset = 0
+        for size in sizes:
+            size = int(size)
+            if size <= 0:
+                raise ValueError("fragment sizes must be positive")
+            if offset >= len(payload):
+                break
+            chunks.append(payload[offset:offset + size])
+            offset += size
+        if offset < len(payload):
+            chunks.append(payload[offset:])
+        return chunks
+
     def send_to_send(self):
 
         if self.to_send:
@@ -2057,14 +2185,21 @@ class Repeater:
             self.packet_index += 1
             self.total_packet_index += 1
 
-            total_data_len = len(self.to_send)
             total_written = 0
+            try:
+                global_index = self.origins[self.whoami][orig_index]
+            except (KeyError, IndexError):
+                # Manual sends do not necessarily belong to a captured packet.
+                global_index = orig_index
 
             scattered_count = 0
 
-            while total_written != total_data_len:
+            exact_chunks = self.split_payload(self.to_send, global_index)
+            while exact_chunks:
 
-                if self.scatter and Features.scatter_prng and \
+                exact_chunk = exact_chunks.pop(0)
+
+                if not self.fragments.get(global_index) and self.scatter and Features.scatter_prng and \
                         not len(self.to_send) < 10 and not self.is_udp and scattered_count < 3:
 
                     max_send = Features.scatter_prng.rand_range(5, len(self.to_send))
@@ -2072,22 +2207,25 @@ class Repeater:
                     scattered_count += 1
                     time.sleep(0.01 * Features.scatter_prng.rand_range(1, 20))
                 else:
-                    cnt = self.write(self.to_send)
+                    cnt = self.write(exact_chunk)
 
                 # not really clean debug, lots of data will be duplicated
                 # if cnt > 200: cnt = 200
 
-                data_len = len(self.to_send)
-
-                if cnt == data_len:
-                    print_green_bright("# ... %s [%d/%d]: has been sent (%d bytes)" % (
-                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt))
-                else:
-                    print_green_bright("# ... %s [%d/%d]: has been sent (ONLY %d/%d bytes)" % (
-                        str_time(), self.packet_index, len(self.origins[self.whoami]), cnt, data_len))
-                    self.to_send = self.to_send[cnt:]
-
                 total_written += cnt
+
+                if not self.fragments.get(global_index) and self.scatter and cnt < len(self.to_send):
+                    self.to_send = self.to_send[cnt:]
+                    exact_chunks = [self.to_send]
+
+            print_green_bright("# ... %s [%d/%d]: has been sent (%d bytes)%s" % (
+                str_time(), self.packet_index, len(self.origins[self.whoami]), total_written,
+                " in %d writes" % len(self.split_payload(been_sent, global_index))
+                if self.fragments.get(global_index) else ""))
+
+            if self.report:
+                self.report.sent_packets += 1
+                self.report.sent_bytes += total_written
 
             self.to_send = None
 
@@ -2205,6 +2343,10 @@ class Repeater:
         else:
             verbose("finished data: %d/%d" % (len_d, len_expected_data))
 
+        if self.report:
+            self.report.received_packets += 1
+            self.report.received_bytes += len(d)
+
         # there are still some data to send/receive
         if self.total_packet_index < len(self.packets):
             # test if data are as we should expect
@@ -2269,6 +2411,9 @@ class Repeater:
                     print_red_bright("#<--")
 
             if different:
+
+                if self.report:
+                    self.report.mismatches += 1
 
                 if Features.verbose:
                     print_yellow_bright("# !!! Expected data:")
@@ -2390,6 +2535,9 @@ class Repeater:
 
                 if not eof_notified:
                     print_red_bright("### END OF TRANSMISSION ###")
+                    if self.report:
+                        self.report.completed = True
+                        self.report.write()
                     eof_notified = True
 
                 if self.exitoneot:
@@ -2589,6 +2737,7 @@ class Repeater:
                 magic = args.fuzz_magic[0]
 
             Features.fuzz_prng = BytesGenerator(magic, use_hash=hashlib.sha256())
+            Features.fuzz_magic = magic
             try:
                 Features.fuzz_level = int(args.fuzz[0])
 
@@ -2685,7 +2834,7 @@ def print_overview():
 
 
 def main():
-    global g_script_module
+    global g_script_module, g_test_report
 
     parser = argparse.ArgumentParser(
         description=title,
@@ -2714,6 +2863,8 @@ def main():
 
     ds.add_argument('--scatter-magic', required=False, nargs=1,
                     help='prng stream scattering - scatter magic seed (default: "pplay")')
+    ds.add_argument('--split', action='append', default=[], metavar='PACKET:SIZES',
+                    help='split a global packet into exact write sizes, for example 0:1,4,17')
 
     group1.add_argument('--script', nargs=1,
                         help='load python script previously generated by --export command, '
@@ -2825,6 +2976,10 @@ def main():
 
     var.add_argument('--verbose', required=False, action='store_true', help='Print out more output.')
     var.add_argument('--debug', required=False, action='store_true', help='Print out debugging info.')
+    var.add_argument('--test', dest='test_mode', action='store_true',
+                     help='non-interactive strict mode: auto-send, exit on EOT or mismatch, no colors/hexdumps')
+    var.add_argument('--report-json', metavar='FILE', help='write an atomic machine-readable replay report')
+    var.add_argument('--report-junit', metavar='FILE', help='write an atomic JUnit XML replay report')
 
     if Features.have_paramiko:
         rem_ssh = parser.add_argument_group("Remote - SSH")
@@ -2842,6 +2997,15 @@ def main():
         prot_sctp.add_argument("--help-sctp", required=False, action='store_true', help="how to get sctp support")
 
     args = parser.parse_args(sys.argv[1:])
+
+    if args.test_mode:
+        args.auto = 0.01
+        args.noauto = False
+        args.nostdin = True
+        args.exitoneot = True
+        args.exitondiff = True
+        args.nohex = True
+        args.nocolor = True
 
     if not Features.have_sctp and args.help_sctp:
         help_sctp()
@@ -2921,6 +3085,24 @@ def main():
         sys.exit(-1)
 
     if repeater is not None:
+
+        if args.report_json or args.report_junit:
+            g_test_report = TestReport(args.report_json, args.report_junit)
+            repeater.report = g_test_report
+
+        repeater.test_mode = args.test_mode
+
+        for split_spec in args.split:
+            try:
+                packet_text, sizes_text = split_spec.split(":", 1)
+                packet_index = int(packet_text)
+                sizes = [int(value) for value in sizes_text.split(",") if value]
+                if packet_index < 0 or not sizes or any(size <= 0 for size in sizes):
+                    raise ValueError
+                repeater.cli_fragments[packet_index] = sizes
+                repeater.fragments[packet_index] = sizes
+            except ValueError:
+                parser.error("--split expects PACKET:SIZE[,SIZE...] with non-negative packet and positive sizes")
 
         debuk("repeater crated")
         repeater.init_fuzz(args)
@@ -3420,7 +3602,12 @@ def main():
 
 
 def cleanup():
-    global g_delete_files
+    global g_delete_files, g_test_report
+    if g_test_report:
+        try:
+            g_test_report.write()
+        except OSError as e:
+            print_red("cannot write test report: %s" % e)
     for f in g_delete_files:
         try:
             debuk("unlink tempfile - %s" % (f,))

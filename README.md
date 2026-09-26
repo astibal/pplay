@@ -33,6 +33,8 @@ local or remote replay
 - [Self-contained replay](#self-contained-replay)
 - [SSH self-deployment](#ssh-self-deployment)
 - [TLS and STARTTLS](#tls-and-starttls)
+- [Automated testing](#automated-testing)
+- [Exact stream fragmentation](#exact-stream-fragmentation)
 - [Useful options](#useful-options)
 - [Legacy SMCAP support](#legacy-smcap-support)
 
@@ -280,6 +282,60 @@ self.pplay.starttls()
 from the appropriate `before_send` or `after_send` hook. The repository contains
 a [STARTTLS example](https://github.com/astibal/pplay/blob/master/examples/smtp_starttls_pps.py).
 
+## Automated testing
+
+`--test` is a strict, non-interactive replay preset. It enables fast automatic
+sending, exits at end of transmission or on a payload mismatch, and disables
+colors and hexdumps.
+
+Each endpoint can write an atomic JSON or JUnit report. Use a different output
+file for the client and server:
+
+```shell
+pplay.py --script replay.py --test \
+  --report-json server.json --report-junit server.xml \
+  --server 127.0.0.1:9000
+
+pplay.py --script replay.py --test \
+  --report-json client.json --report-junit client.xml \
+  --client 127.0.0.1:9000
+```
+
+The JSON result is one of `pass`, `mismatch`, `timeout`, `transport_error`, or
+`incomplete` and contains packet counts, byte counts, mismatch count, role, and
+duration. In test mode the primary exit codes are stable:
+
+```text
+0  replay passed
+2  payload mismatch or invalid CLI usage
+3  death-timer timeout
+4  transport error
+```
+
+## Exact stream fragmentation
+
+`--split` controls individual socket writes for a global packet index. Values
+are chunk sizes; any remaining payload is sent as the final chunk:
+
+```shell
+# Packet 0: write 1 byte, then 4, then 17, then the remainder.
+pplay.py --script replay.py --split 0:1,4,17 --client 127.0.0.1:9000
+```
+
+This is deterministic and takes precedence over random `--scatter` for that
+packet. UDP datagrams are never fragmented.
+
+A PPlayScript can carry the same plan:
+
+```python
+self.fragments = {
+    0: [1, 4, 17],
+    3: [5, 5, 1, 128],
+}
+```
+
+CLI `--split` entries override matching script entries.
+
 ## Useful options
 
 ```text
@@ -290,6 +346,10 @@ a [STARTTLS example](https://github.com/astibal/pplay/blob/master/examples/smtp_
 --nostdin          disable interactive input
 --fuzz LEVEL       deterministically taint payload bytes
 --scatter          split stream payloads into smaller writes
+--split I:SIZES    split packet I into deterministic stream writes
+--test             strict non-interactive replay preset
+--report-json FILE write an atomic JSON test report
+--report-junit FILE write an atomic JUnit XML test report
 --socks HOST:PORT  connect the client through SOCKS5
 --tcp / --udp      override the transport detected in the capture
 ```
