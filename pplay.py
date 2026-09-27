@@ -51,7 +51,7 @@ class Features:
     scatter_prng = None
 
 
-pplay_version = "2.0.11"
+pplay_version = "2.0.12"
 
 # EMBEDDED DATA BEGIN
 # EMBEDDED DATA END
